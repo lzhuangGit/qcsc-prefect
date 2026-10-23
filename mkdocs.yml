@@ -59,6 +59,8 @@ nav:
   - Overview:
       - Home: index.md
       - Architecture: concept.md
+  - Design:
+      - Kubernetes Adapter: design/kubernetes_adapter.md
   - Tutorials:
       - Miyabi Workflow: tutorials/create_qcsc_workflow_for_miyabi.md
       - Fugaku Workflow: tutorials/create_qcsc_workflow_for_fugaku.md
