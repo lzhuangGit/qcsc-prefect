@@ -97,6 +97,7 @@ addopts = "-ra"
 markers = [
     "miyabi_integration: tests that require Miyabi login node and real qsub/qstat",
     "fugaku_integration: tests that require Fugaku login node and real pjsub/pjstat",
+    "kind_integration: tests that require kind + Docker and pass --kind to pytest",
 ]
 
 [tool.ruff]

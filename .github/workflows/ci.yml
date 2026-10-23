@@ -56,6 +56,34 @@ jobs:
       - name: Run pytest
         run: uv run --no-sync pytest
 
+  kind:
+    name: Kind integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install workspace packages (with kubernetes extra)
+        run: uv sync --all-packages --extra kubernetes
+
+      - name: Install kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+
+      - name: Run kind integration tests
+        run: |
+          uv run --no-sync pytest \
+            packages/qcsc-prefect-adapters/tests/test_kubernetes_kind.py \
+            --kind -v \
+            -m kind_integration
+
   # Single required status check for branch protection, independent of the matrix.
   ci-ok:
     name: CI OK
@@ -63,6 +91,7 @@ jobs:
     needs:
       - lint
       - test
+      - kind
     runs-on: ubuntu-latest
     steps:
       - name: Check job results
