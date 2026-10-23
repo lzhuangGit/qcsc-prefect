@@ -1,6 +1,7 @@
-# Required for both targets
-hpc_target = "miyabi" # "miyabi" or "fugaku"
+# Target system: "miyabi", "fugaku", or "kubernetes"
+hpc_target = "miyabi"
 # Miyabi uses project. Fugaku also accepts legacy project, but tutorials prefer `group = "ra000000"`.
+# Kubernetes does not require project or queue.
 project = "gz00"
 # group = "ra000000"
 queue = "regular-c" # Miyabi queue, or Fugaku rscgrp (e.g. "small")
@@ -20,6 +21,7 @@ work_dir = "/work/${GROUP:gz00}/${USER}/miyabi_tutorial"
 # For a cross-HPC demo, prefer target-specific execution profiles such as:
 # execution_profile_block_name = "exec-bitcount-miyabi"
 # execution_profile_block_name = "exec-bitcount-fugaku"
+# execution_profile_block_name = "exec-bitcount-k8s"
 #
 # If the execution recipe is truly identical on both systems, you may reuse one
 # shared ExecutionProfileBlock, for example:
@@ -31,18 +33,30 @@ work_dir = "/work/${GROUP:gz00}/${USER}/miyabi_tutorial"
 # fugaku_spack_modules = ["fj", "fjmpi"]
 # fugaku_mpi_options_for_pjm = ["max-proc-per-node=4"]
 
+# Optional Kubernetes-specific settings (used only when hpc_target = "kubernetes")
+# kubernetes_image = "qcsc-hpc-base:latest"
+# kubernetes_namespace = "default"
+# kubernetes_work_volume_claim = "qcsc-shared-pvc"
+# kubernetes_work_mount_path = "/data/qcsc-prefect"
+# kubernetes_cpu = "2"
+# kubernetes_memory = "4Gi"
+
 # Optional executable override
 # optimized_executable = "/work/gz00/<user>/miyabi_tutorial/get_counts_hist"
 # optimized_executable = "/vol0001/home/<user>/prefect_bitcount_demo/bin/get_counts_hist"
+# optimized_executable = "/data/qcsc-prefect/examples/prefect_bitcount_demo/bin/get_counts_hist"
 
 # Optional naming overrides
 # command_block_name = "cmd-bitcount-hist"
 # execution_profile_block_name = "exec-bitcount-mpi"       # Miyabi default name
 # execution_profile_block_name = "exec-bitcount-fugaku"    # Fugaku suggested name
+# execution_profile_block_name = "exec-bitcount-k8s"       # Kubernetes default name
 # hpc_profile_block_name = "hpc-miyabi-bitcount"           # Miyabi default name
 # hpc_profile_block_name = "hpc-fugaku-bitcount"           # Fugaku suggested name
+# hpc_profile_block_name = "hpc-k8s-bitcount"              # Kubernetes default name
 # options_variable_name = "miyabi-bitcount-options"        # Miyabi default name
 # options_variable_name = "fugaku-bitcount-options"        # Fugaku suggested name
+# options_variable_name = "k8s-bitcount-options"           # Kubernetes default name
 #
 # Shared-name example for a merged demo:
 # options_variable_name = "bitcount-options"

@@ -140,7 +140,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--config", type=Path, help="Path to TOML/JSON config file.")
 
-    parser.add_argument("--hpc-target", choices=["miyabi", "fugaku"])
+    parser.add_argument("--hpc-target", choices=["miyabi", "fugaku", "kubernetes"])
     parser.add_argument("--project")
     parser.add_argument("--group")
     parser.add_argument("--queue")
@@ -157,6 +157,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--fugaku-gfscache")
     parser.add_argument("--fugaku-spack-modules", nargs="+")
     parser.add_argument("--fugaku-mpi-options-for-pjm", nargs="*")
+
+    parser.add_argument("--kubernetes-image")
+    parser.add_argument("--kubernetes-namespace")
+    parser.add_argument("--kubernetes-service-account-name")
+    parser.add_argument("--kubernetes-cpu")
+    parser.add_argument("--kubernetes-memory")
+    parser.add_argument("--kubernetes-work-volume-claim")
+    parser.add_argument("--kubernetes-work-mount-path")
 
     parser.add_argument("--optimized-executable")
     parser.add_argument("--command-block-name")
@@ -237,6 +245,19 @@ def _env_values() -> dict[str, Any]:
         "fugaku_gfscache": _env_str("FUGAKU_GFSCACHE"),
         "fugaku_spack_modules": _env_csv("FUGAKU_SPACK_MODULES"),
         "fugaku_mpi_options_for_pjm": _env_csv("FUGAKU_MPI_OPTIONS_FOR_PJM"),
+        "kubernetes_image": _env_str("BITCOUNT_KUBERNETES_IMAGE", "KUBERNETES_IMAGE"),
+        "kubernetes_namespace": _env_str("BITCOUNT_KUBERNETES_NAMESPACE", "KUBERNETES_NAMESPACE"),
+        "kubernetes_service_account_name": _env_str(
+            "BITCOUNT_KUBERNETES_SERVICE_ACCOUNT", "KUBERNETES_SERVICE_ACCOUNT"
+        ),
+        "kubernetes_cpu": _env_str("BITCOUNT_KUBERNETES_CPU", "KUBERNETES_CPU"),
+        "kubernetes_memory": _env_str("BITCOUNT_KUBERNETES_MEMORY", "KUBERNETES_MEMORY"),
+        "kubernetes_work_volume_claim": _env_str(
+            "BITCOUNT_KUBERNETES_WORK_VOLUME_CLAIM", "KUBERNETES_WORK_VOLUME_CLAIM"
+        ),
+        "kubernetes_work_mount_path": _env_str(
+            "BITCOUNT_KUBERNETES_WORK_MOUNT_PATH", "KUBERNETES_WORK_MOUNT_PATH"
+        ),
         "optimized_executable": os.getenv("BITCOUNT_OPT_EXECUTABLE", "").strip() or None,
         "command_block_name": os.getenv("BITCOUNT_CMD_BLOCK_NAME", "").strip() or None,
         "execution_profile_block_name": (
@@ -273,9 +294,10 @@ def main() -> None:
         .strip()
         .lower()
     )
-    if hpc_target not in {"miyabi", "fugaku"}:
-        raise RuntimeError("'hpc_target' must be either 'miyabi' or 'fugaku'.")
+    if hpc_target not in {"miyabi", "fugaku", "kubernetes"}:
+        raise RuntimeError("'hpc_target' must be 'miyabi', 'fugaku', or 'kubernetes'.")
     is_miyabi = hpc_target == "miyabi"
+    is_kubernetes = hpc_target == "kubernetes"
 
     legacy_tutorial_requested = _resolve_legacy_tutorial_asset_creation(
         requested=_pick_value(
@@ -305,7 +327,17 @@ def main() -> None:
     example_dir = _resolve_example_path()
     default_optimized_exec = str((example_dir / "bin/get_counts_hist").resolve())
 
-    if is_miyabi:
+    if is_kubernetes:
+        project = _pick_value(
+            args.project,
+            config.get("project"),
+            env.get("project"),
+            args.group,
+            config.get("group"),
+            env.get("group"),
+            "",
+        )
+    elif is_miyabi:
         project = _pick_value(
             args.project,
             config.get("project"),
@@ -323,7 +355,7 @@ def main() -> None:
             config.get("project"),
             env.get("project"),
         )
-    if not project:
+    if not project and not is_kubernetes:
         if is_miyabi:
             raise RuntimeError(
                 "Set 'project' in --config/--project or environment "
@@ -334,14 +366,24 @@ def main() -> None:
             "or use BITCOUNT_GROUP/FUGAKU_GROUP/FUGAKU_PROJECT."
         )
 
-    queue = _pick_value(args.queue, config.get("queue"), env.get("queue"))
-    if not queue:
+    queue = _pick_value(
+        args.queue,
+        config.get("queue"),
+        env.get("queue"),
+        "" if is_kubernetes else None,
+    )
+    if not queue and not is_kubernetes:
         raise RuntimeError(
             "Set 'queue' in --config/--queue or environment "
             "(BITCOUNT_QUEUE, MIYABI_PBS_QUEUE, FUGAKU_RSCGRP)."
         )
 
-    launcher_default = "mpiexec.hydra" if is_miyabi else "mpiexec"
+    if is_kubernetes:
+        launcher_default = "single"
+    elif is_miyabi:
+        launcher_default = "mpiexec.hydra"
+    else:
+        launcher_default = "mpiexec"
     launcher = str(
         _pick_value(
             args.launcher,
@@ -359,8 +401,24 @@ def main() -> None:
         )
     ).strip()
 
-    num_nodes = int(_pick_value(args.num_nodes, config.get("num_nodes"), env.get("num_nodes"), 2))
-    mpiprocs = int(_pick_value(args.mpiprocs, config.get("mpiprocs"), env.get("mpiprocs"), 5))
+    default_nodes = 1 if is_kubernetes else 2
+    default_mpiprocs = 1 if is_kubernetes else 5
+    num_nodes = int(
+        _pick_value(
+            args.num_nodes,
+            config.get("num_nodes"),
+            env.get("num_nodes"),
+            default_nodes,
+        )
+    )
+    mpiprocs = int(
+        _pick_value(
+            args.mpiprocs,
+            config.get("mpiprocs"),
+            env.get("mpiprocs"),
+            default_mpiprocs,
+        )
+    )
     ompthreads = int(
         _pick_value(args.ompthreads, config.get("ompthreads"), env.get("ompthreads"), 1)
     )
@@ -399,6 +457,48 @@ def main() -> None:
         )
     )
 
+    kubernetes_image = str(
+        _pick_value(
+            args.kubernetes_image,
+            config.get("kubernetes_image"),
+            env.get("kubernetes_image"),
+            "qcsc-hpc-base:latest",
+        )
+    ).strip()
+    kubernetes_namespace = str(
+        _pick_value(
+            args.kubernetes_namespace,
+            config.get("kubernetes_namespace"),
+            env.get("kubernetes_namespace"),
+            "default",
+        )
+    ).strip()
+    kubernetes_service_account_name = _pick_value(
+        args.kubernetes_service_account_name,
+        config.get("kubernetes_service_account_name"),
+        env.get("kubernetes_service_account_name"),
+    )
+    kubernetes_cpu = _pick_value(
+        args.kubernetes_cpu,
+        config.get("kubernetes_cpu"),
+        env.get("kubernetes_cpu"),
+    )
+    kubernetes_memory = _pick_value(
+        args.kubernetes_memory,
+        config.get("kubernetes_memory"),
+        env.get("kubernetes_memory"),
+    )
+    kubernetes_work_volume_claim = _pick_value(
+        args.kubernetes_work_volume_claim,
+        config.get("kubernetes_work_volume_claim"),
+        env.get("kubernetes_work_volume_claim"),
+    )
+    kubernetes_work_mount_path = _pick_value(
+        args.kubernetes_work_mount_path,
+        config.get("kubernetes_work_mount_path"),
+        env.get("kubernetes_work_mount_path"),
+    )
+
     optimized_exec = str(
         _pick_value(
             args.optimized_executable,
@@ -416,9 +516,18 @@ def main() -> None:
         )
     work_dir = os.path.expandvars(str(work_dir_raw).strip())
 
-    default_exec_block_name = "exec-bitcount-mpi" if is_miyabi else "exec-bitcount-fugaku"
-    default_hpc_block_name = "hpc-miyabi-bitcount" if is_miyabi else "hpc-fugaku-bitcount"
-    default_options_variable = "miyabi-bitcount-options" if is_miyabi else "fugaku-bitcount-options"
+    if is_kubernetes:
+        default_exec_block_name = "exec-bitcount-k8s"
+        default_hpc_block_name = "hpc-k8s-bitcount"
+        default_options_variable = "k8s-bitcount-options"
+    elif is_miyabi:
+        default_exec_block_name = "exec-bitcount-mpi"
+        default_hpc_block_name = "hpc-miyabi-bitcount"
+        default_options_variable = "miyabi-bitcount-options"
+    else:
+        default_exec_block_name = "exec-bitcount-fugaku"
+        default_hpc_block_name = "hpc-fugaku-bitcount"
+        default_options_variable = "fugaku-bitcount-options"
 
     cmd_block_name = str(
         _pick_value(
@@ -494,7 +603,19 @@ def main() -> None:
         environments={},
     ).save(exec_block_name, overwrite=True)
 
-    if is_miyabi:
+    if is_kubernetes:
+        HPCProfileBlock(
+            hpc_target="kubernetes",
+            kubernetes_image=kubernetes_image,
+            kubernetes_namespace=kubernetes_namespace,
+            kubernetes_service_account_name=kubernetes_service_account_name,
+            kubernetes_cpu=kubernetes_cpu,
+            kubernetes_memory=kubernetes_memory,
+            kubernetes_work_volume_claim=kubernetes_work_volume_claim,
+            kubernetes_work_mount_path=kubernetes_work_mount_path,
+            executable_map={"bitcount_hist": optimized_exec},
+        ).save(hpc_block_name, overwrite=True)
+    elif is_miyabi:
         HPCProfileBlock(
             hpc_target="miyabi",
             queue_cpu=str(queue),

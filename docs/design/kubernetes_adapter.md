@@ -16,7 +16,7 @@ transfer and multi-node execution.
 | Multi-pod and MPI execution | Designed, not implemented |
 | Gang scheduling | Designed, not implemented |
 | Remote data transports (`ssh://`, `s3://`, `qiskit-job://`) | Not implemented, interface prepared |
-| Prefect Block integration (`hpc_target="kubernetes"`) | Not implemented |
+| Prefect Block integration (`hpc_target="kubernetes"`) | Implemented |
 | Testing against a real cluster | Not done (tests use fake API clients) |
 
 ## Goals and non-goals

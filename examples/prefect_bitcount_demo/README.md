@@ -2,7 +2,7 @@
 
 This example provides two execution styles:
 
-- `flow_optimized.py`: block-driven execution (works on Miyabi, Fugaku, and Slurm)
+- `flow_optimized.py`: block-driven execution (works on Miyabi, Fugaku, Slurm, and Kubernetes)
 - `flow_tutorial_style.py`: legacy `counter.get(bitstrings)` style with optional HPC profile override
 
 ## Files
@@ -35,6 +35,22 @@ cd /Users/hitomi/Project/qcsc-prefect
 ./examples/prefect_bitcount_demo/build_on_fugaku.sh
 ```
 
+Kubernetes (Generic base image):
+
+```bash
+cd /Users/hitomi/Project/qcsc-prefect
+./docker/build_hpc_base.sh qcsc-hpc-base:latest
+```
+
+Compile `get_counts_hist` for the shared work directory or PVC:
+
+```bash
+mkdir -p examples/prefect_bitcount_demo/bin
+mpicxx -O3 -std=c++17 \
+  -o examples/prefect_bitcount_demo/bin/get_counts_hist \
+  examples/prefect_bitcount_demo/src/get_counts_hist.cpp
+```
+
 ## Create blocks
 
 ```bash
@@ -63,6 +79,16 @@ Fugaku:
 python examples/prefect_bitcount_demo/create_blocks.py \
   --config examples/prefect_bitcount_demo/bitcount_blocks.toml \
   --hpc-target fugaku
+```
+
+Kubernetes:
+
+```bash
+python examples/prefect_bitcount_demo/create_blocks.py \
+  --hpc-target kubernetes \
+  --kubernetes-image qcsc-hpc-base:latest \
+  --work-dir /data/qcsc-prefect/work/bitcount_k8s \
+  --optimized-executable /data/qcsc-prefect/examples/prefect_bitcount_demo/bin/get_counts_hist
 ```
 
 Local Slurm:
@@ -96,6 +122,18 @@ python examples/prefect_bitcount_demo/flow_optimized.py \
   --execution-profile-block exec-bitcount-fugaku \
   --hpc-profile-block hpc-fugaku-bitcount \
   --options-variable fugaku-bitcount-options
+```
+
+Kubernetes example:
+
+```bash
+python examples/prefect_bitcount_demo/flow_optimized.py \
+  --quantum-source random \
+  --command-block cmd-bitcount-hist \
+  --execution-profile-block exec-bitcount-k8s \
+  --hpc-profile-block hpc-k8s-bitcount \
+  --options-variable k8s-bitcount-options \
+  --work-dir /data/qcsc-prefect/work/bitcount_k8s
 ```
 
 `flow_optimized.py` resolves the base work directory in this order:

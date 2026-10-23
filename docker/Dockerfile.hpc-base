@@ -1,0 +1,31 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    OMPI_ALLOW_RUN_AS_ROOT=1 \
+    OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    g++ \
+    gcc \
+    make \
+    cmake \
+    git \
+    curl \
+    ca-certificates \
+    openssh-server \
+    openssh-client \
+    rsync \
+    libopenmpi-dev \
+    openmpi-bin \
+    python3 \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Prepare SSH directory for potential multi-node MPI coordination
+RUN mkdir -p /var/run/sshd /root/.ssh && chmod 700 /root/.ssh
+
+WORKDIR /work
+
+CMD ["/bin/bash"]
