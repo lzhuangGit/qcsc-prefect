@@ -19,14 +19,10 @@ from __future__ import annotations
 import asyncio
 import shutil
 import subprocess
-import tempfile
-import time
 import uuid
-from pathlib import Path
 from typing import Any
 
 import pytest
-
 from qcsc_prefect_adapters.kubernetes.builder import (
     KubernetesJobRequest,
     build_job_manifest,

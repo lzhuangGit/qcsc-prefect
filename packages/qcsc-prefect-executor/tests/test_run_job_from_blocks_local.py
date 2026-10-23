@@ -77,6 +77,25 @@ class _HPCProfileBlockStub:
         self.slurm_memory = slurm_memory
         self.slurm_ntasks = slurm_ntasks
         self.slurm_extra_directives = slurm_extra_directives or []
+        self.kubernetes_image = None
+        self.kubernetes_namespace = "default"
+        self.kubernetes_service_account_name = None
+        self.kubernetes_image_pull_policy = None
+        self.kubernetes_image_pull_secrets = []
+        self.kubernetes_cpu = None
+        self.kubernetes_memory = None
+        self.kubernetes_extra_resources = {}
+        self.kubernetes_node_selector = {}
+        self.kubernetes_tolerations = []
+        self.kubernetes_labels = {}
+        self.kubernetes_annotations = {}
+        self.kubernetes_backoff_limit = 0
+        self.kubernetes_ttl_seconds_after_finished = 3600
+        self.kubernetes_pod_spec_overrides = {}
+        self.kubernetes_volumes = []
+        self.kubernetes_volume_mounts = []
+        self.kubernetes_work_volume_claim = None
+        self.kubernetes_work_mount_path = None
 
 
 def _patch_block_loading(monkeypatch, command, profile, hpc):
@@ -495,3 +514,122 @@ def test_build_scheduler_script_filename_rewrites_scheduler_suffix():
     assert mod.build_scheduler_script_filename("job", "miyabi") == "job.pbs"
     assert mod.build_scheduler_script_filename("job.pbs", "fugaku") == "job.pjm"
     assert mod.build_scheduler_script_filename("job.pjm", "slurm") == "job.slurm"
+
+
+def test_resolve_submission_target_kubernetes(monkeypatch):
+    profile = _ExecutionProfileBlockStub(
+        profile_name="bitcount-k8s",
+        command_name="bitcount-hist",
+        resource_class="cpu",
+    )
+    hpc = _HPCProfileBlockStub(
+        hpc_target="kubernetes",
+        executable_map={"bitcount_hist": "/usr/local/bin/get_counts_hist"},
+    )
+    hpc.kubernetes_namespace = "qcsc-prod"
+
+    async def fake_profile_load(_name: str):
+        return profile
+
+    async def fake_hpc_load(_name: str):
+        return hpc
+
+    class _ProfileAPI:
+        load = staticmethod(fake_profile_load)
+
+    class _HpcAPI:
+        load = staticmethod(fake_hpc_load)
+
+    monkeypatch.setattr(mod, "ExecutionProfileBlock", _ProfileAPI)
+    monkeypatch.setattr(mod, "HPCProfileBlock", _HpcAPI)
+
+    target = asyncio.run(
+        mod.resolve_submission_target(
+            execution_profile_block_name="exec",
+            hpc_profile_block_name="hpc",
+        )
+    )
+
+    assert target.hpc_target == "kubernetes"
+    assert target.queue_name == "qcsc-prod"
+    assert target.project == ""
+
+
+def test_run_job_from_blocks_kubernetes_calls_run_kubernetes_job(tmp_path: Path, monkeypatch):
+    command = _CommandBlockStub("bitcount-hist", "bitcount_hist", ["--base"])
+    profile = _ExecutionProfileBlockStub(
+        profile_name="bitcount-k8s",
+        command_name="bitcount-hist",
+        launcher="single",
+        num_nodes=1,
+        mpiprocs=1,
+    )
+    hpc = _HPCProfileBlockStub(
+        hpc_target="kubernetes",
+        executable_map={"bitcount_hist": "/usr/local/bin/get_counts_hist"},
+    )
+    hpc.kubernetes_image = "qcsc-bitcount:latest"
+    hpc.kubernetes_namespace = "qcsc"
+    hpc.kubernetes_work_volume_claim = "qcsc-pvc"
+    hpc.kubernetes_work_mount_path = "/work"
+
+    _patch_block_loading(monkeypatch, command, profile, hpc)
+
+    captured: dict[str, object] = {}
+
+    async def fake_run_kubernetes_job(*, work_dir, exec_profile, req, **kwargs):
+        captured["work_dir"] = work_dir
+        captured["exec_profile"] = exec_profile
+        captured["req"] = req
+        captured["kwargs"] = kwargs
+        return "k8s-result"
+
+    from qcsc_prefect_executor.kubernetes import run as k8s_run_mod
+
+    monkeypatch.setattr(k8s_run_mod, "run_kubernetes_job", fake_run_kubernetes_job)
+
+    result = asyncio.run(
+        mod.run_job_from_blocks(
+            command_block_name="cmd",
+            execution_profile_block_name="exec",
+            hpc_profile_block_name="hpc",
+            work_dir=tmp_path,
+            metrics_artifact_key="k8s-metrics",
+        )
+    )
+
+    assert result == "k8s-result"
+    assert captured["work_dir"] == tmp_path.resolve()
+    assert captured["exec_profile"].arguments == ["--base"]
+    assert captured["req"].image == "qcsc-bitcount:latest"
+    assert captured["req"].executable == "/usr/local/bin/get_counts_hist"
+    assert captured["req"].namespace == "qcsc"
+    assert captured["req"].work_volume_claim == "qcsc-pvc"
+    assert captured["req"].work_mount_path == "/work"
+
+
+def test_run_job_from_blocks_kubernetes_missing_image_raises(tmp_path: Path, monkeypatch):
+    command = _CommandBlockStub("bitcount-hist", "bitcount_hist", [])
+    profile = _ExecutionProfileBlockStub(
+        profile_name="bitcount-k8s",
+        command_name="bitcount-hist",
+    )
+    hpc = _HPCProfileBlockStub(
+        hpc_target="kubernetes",
+        executable_map={"bitcount_hist": "/usr/local/bin/get_counts_hist"},
+    )
+    hpc.kubernetes_image = None
+
+    _patch_block_loading(monkeypatch, command, profile, hpc)
+
+    import pytest
+
+    with pytest.raises(ValueError, match="must set 'kubernetes_image'"):
+        asyncio.run(
+            mod.run_job_from_blocks(
+                command_block_name="cmd",
+                execution_profile_block_name="exec",
+                hpc_profile_block_name="hpc",
+                work_dir=tmp_path,
+            )
+        )

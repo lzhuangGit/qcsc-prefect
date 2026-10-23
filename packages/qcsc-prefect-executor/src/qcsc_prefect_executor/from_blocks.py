@@ -108,6 +108,12 @@ def _resolve_submission_target_from_loaded_blocks(
 ) -> SubmissionTarget:
     if hpc_block.hpc_target == "local":
         return SubmissionTarget(hpc_target="local", queue_name="", project="")
+    if hpc_block.hpc_target == "kubernetes":
+        return SubmissionTarget(
+            hpc_target="kubernetes",
+            queue_name=getattr(hpc_block, "kubernetes_namespace", "default") or "default",
+            project="",
+        )
     if resource_class == "gpu":
         return SubmissionTarget(
             hpc_target=hpc_block.hpc_target,
@@ -541,7 +547,7 @@ async def _prepare_job_from_blocks(
     submission_target = _resolve_submission_target_from_loaded_blocks(
         hpc_block, execution_profile_block.resource_class
     )
-    if submission_target.hpc_target == "local":
+    if submission_target.hpc_target in {"local", "kubernetes"}:
         resolved_script_filename = None
     else:
         if not script_filename:
@@ -563,6 +569,43 @@ async def _prepare_job_from_blocks(
 
     if submission_target.hpc_target == "local":
         req = LocalJobRequest(executable=executable)
+    elif submission_target.hpc_target == "kubernetes":
+        from qcsc_prefect_adapters.kubernetes.builder import KubernetesJobRequest
+
+        image = getattr(hpc_block, "kubernetes_image", None)
+        if not image:
+            raise ValueError(
+                f"HPCProfileBlock '{hpc_profile_block_name}' must set 'kubernetes_image' "
+                "when hpc_target='kubernetes'."
+            )
+        req = KubernetesJobRequest(
+            image=image,
+            executable=executable,
+            namespace=getattr(hpc_block, "kubernetes_namespace", "default") or "default",
+            service_account_name=getattr(hpc_block, "kubernetes_service_account_name", None),
+            image_pull_policy=getattr(hpc_block, "kubernetes_image_pull_policy", None),
+            image_pull_secrets=tuple(
+                getattr(hpc_block, "kubernetes_image_pull_secrets", ()) or ()
+            ),
+            cpu=getattr(hpc_block, "kubernetes_cpu", None),
+            memory=getattr(hpc_block, "kubernetes_memory", None),
+            extra_resources=dict(getattr(hpc_block, "kubernetes_extra_resources", {}) or {}),
+            node_selector=dict(getattr(hpc_block, "kubernetes_node_selector", {}) or {}),
+            tolerations=tuple(getattr(hpc_block, "kubernetes_tolerations", ()) or ()),
+            labels=dict(getattr(hpc_block, "kubernetes_labels", {}) or {}),
+            annotations=dict(getattr(hpc_block, "kubernetes_annotations", {}) or {}),
+            backoff_limit=getattr(hpc_block, "kubernetes_backoff_limit", 0) or 0,
+            ttl_seconds_after_finished=getattr(
+                hpc_block, "kubernetes_ttl_seconds_after_finished", 3600
+            ),
+            pod_spec_overrides=dict(
+                getattr(hpc_block, "kubernetes_pod_spec_overrides", {}) or {}
+            ),
+            volumes=tuple(getattr(hpc_block, "kubernetes_volumes", ()) or ()),
+            volume_mounts=tuple(getattr(hpc_block, "kubernetes_volume_mounts", ()) or ()),
+            work_volume_claim=getattr(hpc_block, "kubernetes_work_volume_claim", None),
+            work_mount_path=getattr(hpc_block, "kubernetes_work_mount_path", None),
+        )
     elif submission_target.hpc_target == "miyabi":
         req = MiyabiJobRequest(
             queue_name=submission_target.queue_name,
@@ -701,10 +744,10 @@ async def _submit_prepared_job(
     fugaku_no_check_directory: bool = False,
 ) -> str:
     target = prepared.submission_target.hpc_target
-    if target == "local":
+    if target in {"local", "kubernetes"}:
         raise ValueError(
-            "Scheduler submit APIs do not support hpc_target='local'. "
-            "Use run_job_from_blocks() for local execution."
+            f"Scheduler submit APIs do not support hpc_target='{target}'. "
+            f"Use run_job_from_blocks() for {target} execution."
         )
     script_path = _write_script_for_prepared_job(prepared)
 
@@ -1666,6 +1709,18 @@ async def run_job_from_blocks(
         return await run_slurm_job(
             work_dir=prepared.work_dir,
             script_filename=prepared.script_filename,
+            exec_profile=prepared.exec_profile,
+            req=prepared.req,
+            watch_poll_interval=watch_poll_interval,
+            timeout_seconds=timeout_seconds,
+            metrics_artifact_key=metrics_artifact_key,
+        )
+
+    if prepared.submission_target.hpc_target == "kubernetes":
+        from qcsc_prefect_executor.kubernetes.run import run_kubernetes_job
+
+        return await run_kubernetes_job(
+            work_dir=prepared.work_dir,
             exec_profile=prepared.exec_profile,
             req=prepared.req,
             watch_poll_interval=watch_poll_interval,

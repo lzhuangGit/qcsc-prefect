@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from prefect.blocks.core import Block
 from pydantic import Field
@@ -48,8 +48,59 @@ class HPCProfileBlock(Block):
     _block_type_name = "HPC Profile"
     _block_type_slug = "hpc_profile"
 
-    hpc_target: Literal["local", "miyabi", "fugaku", "slurm"] = Field(
+    hpc_target: Literal["local", "miyabi", "fugaku", "slurm", "kubernetes"] = Field(
         default="miyabi", title="Execution Target"
+    )
+
+    # Kubernetes-specific options (ignored for other systems)
+    kubernetes_image: str | None = Field(default=None, title="Kubernetes: Container Image")
+    kubernetes_namespace: str = Field(default="default", title="Kubernetes: Namespace")
+    kubernetes_service_account_name: str | None = Field(
+        default=None, title="Kubernetes: Service Account Name"
+    )
+    kubernetes_image_pull_policy: str | None = Field(
+        default=None, title="Kubernetes: Image Pull Policy"
+    )
+    kubernetes_image_pull_secrets: list[str] = Field(
+        default_factory=list, title="Kubernetes: Image Pull Secrets"
+    )
+    kubernetes_cpu: str | None = Field(default=None, title="Kubernetes: CPU Request and Limit")
+    kubernetes_memory: str | None = Field(
+        default=None, title="Kubernetes: Memory Request and Limit"
+    )
+    kubernetes_extra_resources: dict[str, str] = Field(
+        default_factory=dict, title="Kubernetes: Extra Resources"
+    )
+    kubernetes_node_selector: dict[str, str] = Field(
+        default_factory=dict, title="Kubernetes: Node Selector"
+    )
+    kubernetes_tolerations: list[dict[str, Any]] = Field(
+        default_factory=list, title="Kubernetes: Tolerations"
+    )
+    kubernetes_labels: dict[str, str] = Field(
+        default_factory=dict, title="Kubernetes: Labels"
+    )
+    kubernetes_annotations: dict[str, str] = Field(
+        default_factory=dict, title="Kubernetes: Annotations"
+    )
+    kubernetes_backoff_limit: int = Field(default=0, title="Kubernetes: Backoff Limit")
+    kubernetes_ttl_seconds_after_finished: int | None = Field(
+        default=3600, title="Kubernetes: TTL Seconds After Finished"
+    )
+    kubernetes_pod_spec_overrides: dict[str, Any] = Field(
+        default_factory=dict, title="Kubernetes: Pod Spec Overrides"
+    )
+    kubernetes_volumes: list[dict[str, Any]] = Field(
+        default_factory=list, title="Kubernetes: Volumes"
+    )
+    kubernetes_volume_mounts: list[dict[str, Any]] = Field(
+        default_factory=list, title="Kubernetes: Volume Mounts"
+    )
+    kubernetes_work_volume_claim: str | None = Field(
+        default=None, title="Kubernetes: Work Volume Claim (PVC)"
+    )
+    kubernetes_work_mount_path: str | None = Field(
+        default=None, title="Kubernetes: Work Mount Path"
     )
 
     # Queue/partition/resource-group names (terminology differs by system)
