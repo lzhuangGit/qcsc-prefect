@@ -161,6 +161,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--kubernetes-image")
     parser.add_argument("--kubernetes-namespace")
     parser.add_argument("--kubernetes-service-account-name")
+    parser.add_argument("--kubernetes-image-pull-policy")
     parser.add_argument("--kubernetes-cpu")
     parser.add_argument("--kubernetes-memory")
     parser.add_argument("--kubernetes-work-volume-claim")
@@ -249,6 +250,9 @@ def _env_values() -> dict[str, Any]:
         "kubernetes_namespace": _env_str("BITCOUNT_KUBERNETES_NAMESPACE", "KUBERNETES_NAMESPACE"),
         "kubernetes_service_account_name": _env_str(
             "BITCOUNT_KUBERNETES_SERVICE_ACCOUNT", "KUBERNETES_SERVICE_ACCOUNT"
+        ),
+        "kubernetes_image_pull_policy": _env_str(
+            "BITCOUNT_KUBERNETES_IMAGE_PULL_POLICY", "KUBERNETES_IMAGE_PULL_POLICY"
         ),
         "kubernetes_cpu": _env_str("BITCOUNT_KUBERNETES_CPU", "KUBERNETES_CPU"),
         "kubernetes_memory": _env_str("BITCOUNT_KUBERNETES_MEMORY", "KUBERNETES_MEMORY"),
@@ -478,6 +482,14 @@ def main() -> None:
         config.get("kubernetes_service_account_name"),
         env.get("kubernetes_service_account_name"),
     )
+    kubernetes_image_pull_policy = str(
+        _pick_value(
+            args.kubernetes_image_pull_policy,
+            config.get("kubernetes_image_pull_policy"),
+            env.get("kubernetes_image_pull_policy"),
+            "IfNotPresent",
+        )
+    ).strip()
     kubernetes_cpu = _pick_value(
         args.kubernetes_cpu,
         config.get("kubernetes_cpu"),
@@ -609,6 +621,7 @@ def main() -> None:
             kubernetes_image=kubernetes_image,
             kubernetes_namespace=kubernetes_namespace,
             kubernetes_service_account_name=kubernetes_service_account_name,
+            kubernetes_image_pull_policy=kubernetes_image_pull_policy,
             kubernetes_cpu=kubernetes_cpu,
             kubernetes_memory=kubernetes_memory,
             kubernetes_work_volume_claim=kubernetes_work_volume_claim,

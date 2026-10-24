@@ -59,7 +59,7 @@ class HPCProfileBlock(Block):
         default=None, title="Kubernetes: Service Account Name"
     )
     kubernetes_image_pull_policy: str | None = Field(
-        default=None, title="Kubernetes: Image Pull Policy"
+        default="IfNotPresent", title="Kubernetes: Image Pull Policy"
     )
     kubernetes_image_pull_secrets: list[str] = Field(
         default_factory=list, title="Kubernetes: Image Pull Secrets"

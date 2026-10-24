@@ -93,6 +93,7 @@ def test_main_creates_kubernetes_blocks(monkeypatch, tmp_path):
     assert getattr(hpc_block, "hpc_target") == "kubernetes"
     assert getattr(hpc_block, "kubernetes_image") == "qcsc-hpc-base:v1"
     assert getattr(hpc_block, "kubernetes_namespace") == "qcsc-ns"
+    assert getattr(hpc_block, "kubernetes_image_pull_policy") == "IfNotPresent"
     assert getattr(hpc_block, "kubernetes_work_volume_claim") == "qcsc-shared-pvc"
     assert getattr(hpc_block, "kubernetes_work_mount_path") == "/data/qcsc-prefect"
 

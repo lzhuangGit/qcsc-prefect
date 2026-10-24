@@ -47,9 +47,6 @@ async def sample_bitstrings(
     default_shots: int,
     random_seed: int,
 ) -> list[str]:
-    from prefect_qiskit import QuantumRuntime
-    from qiskit.transpiler import generate_preset_pass_manager
-
     shots = resolve_shots(sampler_options=sampler_options, default_shots=default_shots)
     if quantum_source == "random":
         return generate_random_bitstrings(
@@ -57,6 +54,9 @@ async def sample_bitstrings(
             shots=shots,
             seed=random_seed,
         )
+
+    from prefect_qiskit import QuantumRuntime
+    from qiskit.transpiler import generate_preset_pass_manager
 
     runtime = await QuantumRuntime.load(runtime_block_name)
     target = await runtime.get_target()
