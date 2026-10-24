@@ -53,9 +53,11 @@ class KubernetesJobRequest:
         volume_mounts: Raw container ``volumeMounts`` entries.
         work_volume_claim: Name of an existing ReadWriteMany PVC that holds the
             shared work directory. Mounted at ``work_mount_path``.
-        work_mount_path: Absolute path where ``work_volume_claim`` is mounted
-            and the container working directory. Use the same path the Prefect
-            worker sees, so file paths are valid on both sides.
+        work_mount_path: Absolute path where ``work_volume_claim`` is mounted.
+            Use the same path the Prefect worker sees, so file paths are valid
+            on both sides.
+        working_dir: Optional explicit working directory for the container.
+            Defaults to ``work_mount_path`` when ``work_volume_claim`` is set.
     """
 
     image: str
@@ -79,6 +81,7 @@ class KubernetesJobRequest:
     volume_mounts: tuple[dict[str, Any], ...] = ()
     work_volume_claim: str | None = None
     work_mount_path: str | None = None
+    working_dir: str | None = None
 
 
 def sanitize_job_name(name: str) -> str:
@@ -191,7 +194,9 @@ def build_job_manifest(
             }
         )
         volume_mounts.append({"name": WORK_VOLUME_NAME, "mountPath": req.work_mount_path})
-        container["workingDir"] = req.work_mount_path
+        container["workingDir"] = req.working_dir or req.work_mount_path
+    elif req.working_dir:
+        container["workingDir"] = req.working_dir
     if volume_mounts:
         container["volumeMounts"] = volume_mounts
 

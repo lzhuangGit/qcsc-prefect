@@ -94,6 +94,21 @@ def test_manifest_mounts_shared_work_volume_and_passthrough_volumes():
     assert container["workingDir"] == "/data/work"
 
 
+def test_manifest_custom_working_dir_overrides_mount_path():
+    req = KubernetesJobRequest(
+        image="img",
+        executable="/bin/true",
+        work_volume_claim="shared-rwx",
+        work_mount_path="/data/work",
+        working_dir="/data/work/subfolder/job-1",
+    )
+
+    manifest = build_job_manifest(exec_profile=_profile(), req=req)
+
+    container = manifest["spec"]["template"]["spec"]["containers"][0]
+    assert container["workingDir"] == "/data/work/subfolder/job-1"
+
+
 def test_manifest_without_storage_has_no_volume_keys():
     manifest = build_job_manifest(
         exec_profile=_profile(), req=KubernetesJobRequest(image="img", executable="/x")

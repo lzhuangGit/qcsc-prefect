@@ -97,10 +97,15 @@ async def run_kubernetes_job(
         timeout_seconds: Optional maximum wait; the Job is deleted on timeout.
         metrics_artifact_key: Prefect artifact key for the metrics table.
     """
+    from dataclasses import replace
+
     logger = get_run_logger()
     work_dir.mkdir(parents=True, exist_ok=True)
 
     await asyncio.to_thread(_verify_inputs, inputs)
+
+    if req.working_dir is None:
+        req = replace(req, working_dir=str(work_dir.resolve()))
 
     manifest = build_job_manifest(exec_profile=exec_profile, req=req)
     (work_dir / "job-manifest.json").write_text(json.dumps(manifest, indent=2))

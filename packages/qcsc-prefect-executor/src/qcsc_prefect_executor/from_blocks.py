@@ -605,6 +605,7 @@ async def _prepare_job_from_blocks(
             volume_mounts=tuple(getattr(hpc_block, "kubernetes_volume_mounts", ()) or ()),
             work_volume_claim=getattr(hpc_block, "kubernetes_work_volume_claim", None),
             work_mount_path=getattr(hpc_block, "kubernetes_work_mount_path", None),
+            working_dir=str(resolved_work_dir),
         )
     elif submission_target.hpc_target == "miyabi":
         req = MiyabiJobRequest(
