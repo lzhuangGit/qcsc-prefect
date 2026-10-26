@@ -40,6 +40,11 @@ work_dir = "/work/${GROUP:gz00}/${USER}/miyabi_tutorial"
 # kubernetes_work_mount_path = "/data/qcsc-prefect"
 # kubernetes_cpu = "2"
 # kubernetes_memory = "4Gi"
+# Pin Job pods to specific nodes (e.g. an EKS Auto Mode NodePool with labels and taints).
+# Node selector: label key/value pairs. Tolerations: Kubernetes toleration dicts,
+# or strings in the form "key=value:effect" (Equal) / "key:effect" (Exists).
+# kubernetes_node_selector = { use = "infra", arch = "arm64" }
+# kubernetes_tolerations = ["use=infra:NoSchedule", "arch=arm64:NoSchedule"]
 
 # Optional executable override
 # optimized_executable = "/work/gz00/<user>/miyabi_tutorial/get_counts_hist"

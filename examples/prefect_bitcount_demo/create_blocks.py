@@ -166,6 +166,21 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--kubernetes-memory")
     parser.add_argument("--kubernetes-work-volume-claim")
     parser.add_argument("--kubernetes-work-mount-path")
+    parser.add_argument(
+        "--kubernetes-node-selector",
+        nargs="+",
+        metavar="KEY=VALUE",
+        help="Job pod node selector labels, e.g. use=infra arch=arm64.",
+    )
+    parser.add_argument(
+        "--kubernetes-toleration",
+        nargs="+",
+        metavar="KEY[=VALUE][:EFFECT]",
+        help=(
+            "Job pod tolerations, e.g. use=infra:NoSchedule arch=arm64:NoSchedule. "
+            "'key=value:effect' uses operator Equal; 'key:effect' or 'key' uses Exists."
+        ),
+    )
 
     parser.add_argument("--optimized-executable")
     parser.add_argument("--command-block-name")
@@ -191,6 +206,50 @@ def _normalize_str_list(value: Any) -> list[str] | None:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     raise ValueError(f"Expected list[str] or CSV string, got: {type(value)}")
+
+
+def _normalize_node_selector(value: Any) -> dict[str, str] | None:
+    """Accept a dict (config file) or 'key=value' items / CSV string (CLI, env)."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return {str(k): str(v) for k, v in value.items()}
+    items = _normalize_str_list(value) or []
+    selector: dict[str, str] = {}
+    for item in items:
+        key, sep, val = item.partition("=")
+        if not sep or not key.strip():
+            raise ValueError(f"Node selector must be 'key=value', got: {item!r}")
+        selector[key.strip()] = val.strip()
+    return selector
+
+
+def _parse_toleration(item: Any) -> dict[str, str]:
+    """Accept a toleration dict or a 'key[=value][:effect]' string."""
+    if isinstance(item, dict):
+        return {str(k): str(v) for k, v in item.items()}
+    text = str(item).strip()
+    key_value, _, effect = text.partition(":")
+    key, sep, val = key_value.partition("=")
+    key = key.strip()
+    if not key:
+        raise ValueError(f"Toleration must be 'key[=value][:effect]', got: {item!r}")
+    toleration = {"key": key, "operator": "Equal" if sep else "Exists"}
+    if sep:
+        toleration["value"] = val.strip()
+    if effect.strip():
+        toleration["effect"] = effect.strip()
+    return toleration
+
+
+def _normalize_tolerations(value: Any) -> list[dict[str, str]] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = _normalize_str_list(value)
+    if isinstance(value, (list, tuple)):
+        return [_parse_toleration(item) for item in value]
+    raise ValueError(f"Expected list of tolerations or CSV string, got: {type(value)}")
 
 
 def _load_config_file(path: Path | None) -> dict[str, Any]:
@@ -261,6 +320,12 @@ def _env_values() -> dict[str, Any]:
         ),
         "kubernetes_work_mount_path": _env_str(
             "BITCOUNT_KUBERNETES_WORK_MOUNT_PATH", "KUBERNETES_WORK_MOUNT_PATH"
+        ),
+        "kubernetes_node_selector": _env_csv(
+            "BITCOUNT_KUBERNETES_NODE_SELECTOR", "KUBERNETES_NODE_SELECTOR"
+        ),
+        "kubernetes_tolerations": _env_csv(
+            "BITCOUNT_KUBERNETES_TOLERATIONS", "KUBERNETES_TOLERATIONS"
         ),
         "optimized_executable": os.getenv("BITCOUNT_OPT_EXECUTABLE", "").strip() or None,
         "command_block_name": os.getenv("BITCOUNT_CMD_BLOCK_NAME", "").strip() or None,
@@ -510,6 +575,22 @@ def main() -> None:
         config.get("kubernetes_work_mount_path"),
         env.get("kubernetes_work_mount_path"),
     )
+    kubernetes_node_selector = _normalize_node_selector(
+        _pick_value(
+            args.kubernetes_node_selector,
+            config.get("kubernetes_node_selector"),
+            env.get("kubernetes_node_selector"),
+            {},
+        )
+    )
+    kubernetes_tolerations = _normalize_tolerations(
+        _pick_value(
+            args.kubernetes_toleration,
+            config.get("kubernetes_tolerations"),
+            env.get("kubernetes_tolerations"),
+            [],
+        )
+    )
 
     optimized_exec = str(
         _pick_value(
@@ -626,6 +707,8 @@ def main() -> None:
             kubernetes_memory=kubernetes_memory,
             kubernetes_work_volume_claim=kubernetes_work_volume_claim,
             kubernetes_work_mount_path=kubernetes_work_mount_path,
+            kubernetes_node_selector=kubernetes_node_selector or {},
+            kubernetes_tolerations=kubernetes_tolerations or [],
             executable_map={"bitcount_hist": optimized_exec},
         ).save(hpc_block_name, overwrite=True)
     elif is_miyabi:
