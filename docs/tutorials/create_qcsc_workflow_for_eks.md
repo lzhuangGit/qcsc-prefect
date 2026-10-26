@@ -382,6 +382,43 @@ python examples/prefect_bitcount_demo/create_blocks.py \
 
 If `latest` is cached on the nodes and you push a new image, pass `--kubernetes-image-pull-policy Always`.
 
+> [!IMPORTANT]
+> Three settings must agree with where the runner pod mounts the PVC (`/data/qcsc-prefect` in this tutorial's manifest): `--kubernetes-work-mount-path`, `--work-dir`, and `--optimized-executable`. If you mount the PVC somewhere else (for example `/ldata`), change all three to match. The runner and the Job pods must see the work directory at the same path.
+
+### SELinux-enforcing nodes (EKS Auto Mode): launch through `mpirun`
+
+EKS Auto Mode nodes run SELinux in enforcing mode. A Job pod can fail immediately with:
+
+```text
+exec /<mount-path>/.../bin/get_counts_hist: permission denied
+```
+
+even though the file is `rwxr-xr-x` and runs fine when you start it from a shell inside a pod.
+
+**Cause.** The binary lives on the shared volume, and files on many network and parallel file systems carry a generic SELinux label such as `local_t` instead of the container label that files from the image have. The node's audit log shows the denial:
+
+```text
+avc: denied { entrypoint } comm="runc:[2:INIT]" path=".../bin/get_counts_hist"
+  scontext=system_u:system_r:container_t:s0:c201,c524
+  tcontext=system_u:object_r:local_t:s0 tclass=file permissive=0
+```
+
+`container_t` is not allowed the `entrypoint` permission on a `local_t` file. The container runtime needs that permission only when the file is the container's **first process**. Running the same file from a shell already inside the container needs ordinary execute permission, so it works. The exact label depends on your storage driver; the shared-volume type in the example above is whatever your cluster's PV/PVC uses.
+
+**Workaround.** Make `mpirun` from the image the container's first process, so it starts `get_counts_hist` as a child:
+
+```bash
+BITCOUNT_MPI_OPTIONS="-np,1" python examples/prefect_bitcount_demo/create_blocks.py \
+  --hpc-target kubernetes --launcher mpirun \
+  ... # same flags as above
+```
+
+- `-np 1` keeps a single MPI rank, matching the default `single` launcher. The option is passed through the environment variable because argparse would read a value starting with `-` as a flag.
+- Skip this if your Job pods start normally.
+- Baking `get_counts_hist` into the container image also avoids the problem, because the binary then carries the container's own label.
+- Relabeling the volume (for example with a `context=` mount option) might also work. It has not been tried here, and whether it is allowed depends on your storage driver and the Auto Mode SELinux policy.
+- Setting the same `seLinuxOptions.level` (MCS categories) on all pods is the approach [AWS documents for sharing volumes between pods](https://docs.aws.amazon.com/eks/latest/userguide/auto-troubleshoot.html). It addresses category isolation, not the type denial above, and has not been tried for this problem.
+
 ### Registered Blocks & Variables
 
 | Block / Variable | Name | Purpose |
@@ -515,6 +552,18 @@ The node name should be one of your Graviton nodes.
 
 ### 8. `ModuleNotFoundError: No module named 'prefect_qiskit'`
 - `--quantum-source random` does not need `prefect-qiskit`. For `--quantum-source real-device`, run `pip install prefect-qiskit`.
+
+### 9. Job pod fails with `exec .../get_counts_hist: permission denied`
+- **Symptom**: `kubectl logs <job-pod>` shows only that line, with exit code 255, even though the file is executable and runs from a shell in the runner pod.
+- **Cause**: on SELinux-enforcing nodes (EKS Auto Mode), `container_t` is denied the `entrypoint` permission on the binary's volume label. To confirm, compare labels in the runner pod with `ls -Z /usr/bin/mpirun <path-to-binary>`, then read the denial on the node:
+  ```bash
+  kubectl debug node/<instance-id> -it --image=ubuntu --profile=sysadmin   # kubectl 1.30+; privileged pod, delete it afterwards
+  chroot /host
+  dmesg | grep -i avc     # look for: denied { entrypoint } ... tcontext=...local_t...
+  ```
+  Auto Mode has no SSH or SSM access. The debug pod needs tolerations for your NodePool taints to be scheduled on a tainted node.
+- **Fix**: use `--launcher mpirun` as described in Step 6, or bake the binary into the image.
+- **Also check**: the PVC mount path, `--work-dir`, and `--optimized-executable` agree (see the note in Step 6). A mismatch gives a different failure, but it is an easy mistake to make.
 
 ---
 
