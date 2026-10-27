@@ -69,10 +69,10 @@ Key principles in this tutorial:
 
 ## What you need
 
-- Docker or Podman (e.g. Docker Desktop or Podman Desktop)
-- `kind` (Kubernetes in Docker) and `kubectl` CLI installed:
+- **Container Engine**: **Docker Desktop** (or OrbStack) OR **Podman** (Podman Desktop / `podman machine`) running on macOS
+- **`kind`** (Kubernetes in Docker) and **`kubectl`** CLI installed:
   - macOS (Homebrew): `brew install kind kubectl`
-- A reachable Prefect backend (Prefect Cloud account or self-hosted Prefect server)
+- A reachable **Prefect backend** (Prefect Cloud account or self-hosted Prefect server)
 
 If you want to run against IBM Quantum Runtime later, you will also need:
 - A configured `QuantumRuntime` block such as `ibm-runner`
@@ -84,7 +84,7 @@ If you want to run against IBM Quantum Runtime later, you will also need:
 
 If you already have a Kubernetes cluster with a shared RWX storage class, you can proceed directly to [Step 1](#step-1-build-the-generic-hpc-base-image).
 
-To create a local `kind` cluster with persistent host storage on your laptop:
+To create a local `kind` cluster with persistent host storage on your Mac:
 
 1. **Create the shared storage directory under your home folder**:
 
@@ -93,25 +93,11 @@ mkdir -p "$HOME/qcsc-shared-storage"
 ```
 
 > [!NOTE]
-> When using Podman on macOS, placing the directory under `$HOME` ensures it is mounted into the Podman virtual machine.
+> On macOS, placing the directory under `$HOME` (e.g. `/Users/<username>`) ensures it is automatically shared with the Docker or Podman virtual machine.
 
-2. **Create the `kind-config.yaml` cluster definition**:
-
-```yaml
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-name: qcsc-cluster
-nodes:
-- role: control-plane
-  extraMounts:
-  - hostPath: /path/to/qcsc-shared-storage # Replace with your $HOME/qcsc-shared-storage absolute path
-    containerPath: /data/qcsc-storage
-```
-
-3. **Create the kind cluster**:
+2. **Generate the `kind-config.yaml` cluster configuration**:
 
 ```bash
-# Substitute your actual $HOME path in the config
 cat <<EOF > kind-config.yaml
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -122,8 +108,16 @@ nodes:
   - hostPath: $HOME/qcsc-shared-storage
     containerPath: /data/qcsc-storage
 EOF
+```
 
+3. **Create the `kind` cluster**:
+
+```bash
+# When using Docker:
 kind create cluster --config kind-config.yaml
+
+# When using Podman:
+KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --config kind-config.yaml
 ```
 
 4. **Verify cluster readiness**:
@@ -139,21 +133,22 @@ kubectl get nodes
 Build the generic base image containing compilers, Open MPI, Python, and system tools:
 
 ```bash
+# When using Docker:
 ./docker/build_hpc_base.sh qcsc-hpc-base:latest
+
+# When using Podman:
+podman build -t qcsc-hpc-base:latest -f docker/Dockerfile.hpc-base .
 ```
 
-If using a local `kind` cluster:
+Load the newly built image directly into the local `kind` cluster:
 
 ```bash
 # When using Docker:
-kind load docker-image qcsc-hpc-base:latest
+kind load docker-image qcsc-hpc-base:latest --name qcsc-cluster
 
 # When using Podman (Podman prepends `localhost/` to local image names):
-kind load docker-image localhost/qcsc-hpc-base:latest
+KIND_EXPERIMENTAL_PROVIDER=podman kind load docker-image localhost/qcsc-hpc-base:latest --name qcsc-cluster
 ```
-
-> [!TIP]
-> If you built the image with Podman, use `localhost/qcsc-hpc-base:latest` as the image name in all manifests and `create_blocks.py` calls so Kubernetes matches the locally loaded image without attempting to pull from Docker Hub.
 
 *(For remote clusters, tag and push the image to your container registry).*
 
@@ -161,9 +156,14 @@ kind load docker-image localhost/qcsc-hpc-base:latest
 
 ## Step 2. Deploy Cluster Infrastructure (PV, PVC, RBAC, Runner Pod)
 
-Create a single manifest `k8s-qcsc-setup.yaml` containing the PersistentVolume, PersistentVolumeClaim, RBAC permissions, and the runner pod:
+Create and apply the `k8s-qcsc-setup.yaml` manifest containing the PersistentVolume, PersistentVolumeClaim, RBAC permissions, and the runner pod.
 
-```yaml
+Select the snippet corresponding to your container runtime:
+
+### Option A: Using Docker
+
+```bash
+cat <<EOF > k8s-qcsc-setup.yaml
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -233,7 +233,7 @@ spec:
   serviceAccountName: qcsc-prefect-runner
   containers:
   - name: runner
-    image: qcsc-hpc-base:latest # or localhost/qcsc-hpc-base:latest when using Podman
+    image: qcsc-hpc-base:latest
     imagePullPolicy: IfNotPresent
     command: ["/bin/bash", "-c", "sleep infinity"]
     volumeMounts:
@@ -243,11 +243,96 @@ spec:
   - name: shared-storage
     persistentVolumeClaim:
       claimName: qcsc-shared-pvc
+EOF
+
+kubectl apply -f k8s-qcsc-setup.yaml
 ```
 
-Apply the setup to your Kubernetes cluster:
+### Option B: Using Podman
 
 ```bash
+cat <<EOF > k8s-qcsc-setup.yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: qcsc-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteMany
+  storageClassName: manual
+  hostPath:
+    path: /data/qcsc-storage
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qcsc-shared-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: manual
+  volumeName: qcsc-pv
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: qcsc-prefect-runner
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: qcsc-job-manager
+  namespace: default
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs", "jobs/status"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/status"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: qcsc-job-manager-binding
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: qcsc-prefect-runner
+  namespace: default
+roleRef:
+  kind: Role
+  name: qcsc-job-manager
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: qcsc-prefect-runner
+  namespace: default
+spec:
+  serviceAccountName: qcsc-prefect-runner
+  containers:
+  - name: runner
+    image: localhost/qcsc-hpc-base:latest
+    imagePullPolicy: IfNotPresent
+    command: ["/bin/bash", "-c", "sleep infinity"]
+    volumeMounts:
+    - name: shared-storage
+      mountPath: /data/qcsc-prefect
+  volumes:
+  - name: shared-storage
+    persistentVolumeClaim:
+      claimName: qcsc-shared-pvc
+EOF
+
 kubectl apply -f k8s-qcsc-setup.yaml
 ```
 
@@ -329,8 +414,17 @@ prefect cloud login --key "<PREFECT_API_KEY>"
 Run `create_blocks.py` to register the Kubernetes blocks and variables:
 
 ```bash
-# If using Docker: --kubernetes-image qcsc-hpc-base:latest
-# If using Podman: --kubernetes-image localhost/qcsc-hpc-base:latest
+# When using Docker:
+python examples/prefect_bitcount_demo/create_blocks.py \
+  --hpc-target kubernetes \
+  --kubernetes-image qcsc-hpc-base:latest \
+  --kubernetes-namespace default \
+  --kubernetes-work-volume-claim qcsc-shared-pvc \
+  --kubernetes-work-mount-path /data/qcsc-prefect \
+  --work-dir /data/qcsc-prefect/work/bitcount_k8s \
+  --optimized-executable /data/qcsc-prefect/examples/prefect_bitcount_demo/bin/get_counts_hist
+
+# When using Podman (use localhost/ image prefix):
 python examples/prefect_bitcount_demo/create_blocks.py \
   --hpc-target kubernetes \
   --kubernetes-image localhost/qcsc-hpc-base:latest \
@@ -445,23 +539,30 @@ In your browser on the Prefect UI, navigate to the completed flow run and inspec
     pip install prefect-qiskit
     ```
 
-### 4. Podman on macOS Host Storage and Image Names
-- **Storage Path**: Podman machine on macOS only mounts directories under `$HOME` by default. Always create the shared storage under `$HOME` (e.g. `$HOME/qcsc-shared-storage`), not under `/tmp`.
-- **Image Naming**: Podman prefixes locally built images with `localhost/` (e.g. `localhost/qcsc-hpc-base:latest`). When loading into `kind`, specify `localhost/qcsc-hpc-base:latest` in `k8s-qcsc-setup.yaml` and `--kubernetes-image` in `create_blocks.py` so Kubernetes does not attempt to pull from Docker Hub.
-
-### 5. `Failed to pull image "localhost/...": connection refused`
+### 4. Local Kind Images and `imagePullPolicy: IfNotPresent`
 - **Symptom**:
   ```text
-  Failed to pull image "localhost/qcsc-hpc-base:latest": failed to resolve reference: failed to do request: Head "https://localhost/v2/...": connect: connection refused
+  ErrImagePull / ImagePullBackOff: Failed to pull image "qcsc-hpc-base:latest": failed to resolve reference ...
   ```
-- **Cause**: Kubernetes defaults `imagePullPolicy` to `Always` whenever the image tag is `:latest` (or omitted). This causes kubelet to query a remote registry at `localhost:443` rather than using the pre-loaded image in `kind`.
-- **Solution**: Set `kubernetes_image_pull_policy="IfNotPresent"` (configured by default in `create_blocks.py`) so kubelet utilizes the locally loaded image without making network requests.
+- **Cause**: Kubernetes defaults `imagePullPolicy` to `Always` whenever an image uses the `:latest` tag (or has no tag). This causes kubelet to attempt to download the image from a remote registry (e.g., Docker Hub) instead of using the local image pre-loaded into the `kind` node.
+- **Solution**: Both `k8s-qcsc-setup.yaml` and `create_blocks.py` default `imagePullPolicy` to `IfNotPresent`. If creating custom Job templates, always set:
+  ```yaml
+  image: qcsc-hpc-base:latest
+  imagePullPolicy: IfNotPresent
+  ```
+
+---
+
+### 5. Podman Tips on macOS
+- **Provider Flag**: `kind` requires `KIND_EXPERIMENTAL_PROVIDER=podman` when using Podman as the container engine (e.g. `KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster ...`).
+- **Image Names**: Podman prefixes locally built images with `localhost/` (e.g., `localhost/qcsc-hpc-base:latest`). Always use `localhost/qcsc-hpc-base:latest` in `k8s-qcsc-setup.yaml` and `--kubernetes-image` in `create_blocks.py` so kubelet finds the pre-loaded image in kind without attempting to query a remote registry.
+- **Machine Storage**: Podman machines on macOS only mount directories under `$HOME` into the VM by default. Always keep the host shared storage under `$HOME` (e.g. `$HOME/qcsc-shared-storage`).
 
 ---
 
 ## Step 8. Cleaning Up
 
-When you are finished with the tutorial, you can tear down the resources:
+When you are finished with the tutorial, you can tear down all local resources:
 
 1. **Delete cluster resources**:
 ```bash
@@ -470,11 +571,15 @@ kubectl delete -f k8s-qcsc-setup.yaml
 
 2. **Delete the `kind` cluster**:
 ```bash
+# When using Docker:
 kind delete cluster --name qcsc-cluster
+
+# When using Podman:
+KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name qcsc-cluster
 ```
 
-3. **(Optional) Clean up local storage and image**:
+3. **(Optional) Clean up local storage and generated configs**:
 ```bash
 rm -rf "$HOME/qcsc-shared-storage"
-rm -f kind-config.yaml
+rm -f kind-config.yaml k8s-qcsc-setup.yaml
 ```
