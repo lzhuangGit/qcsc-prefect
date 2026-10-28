@@ -78,19 +78,20 @@ flow whose main process controls work in other pods.
 Decisions:
 
 - **No work pool or deployment.** The flow starts with Prefect credentials from
-  a Secret (`envFrom`) and is expected to appear in the Prefect UI as an ad hoc
-  run. The expected trade-off is that a run cannot be cancelled from the Prefect
-  UI, because nothing in the cluster listens for the cancellation. The user
-  stops a run with `kubectl delete -f runs/<run-id>/`. A Kubernetes work pool
-  would add UI cancellation, schedules and retries at the cost of a worker, a
-  pool and a job template. Neither the UI behavior nor the state a deleted run
-  is left in has been verified on a real cluster yet.
+  a Secret (`envFrom`) and appears in the Prefect UI as an ad hoc run. The
+  trade-off is that a run cannot be cancelled from the Prefect UI, because
+  nothing in the cluster listens for the cancellation. The user stops a run with
+  `kubectl delete -f runs/<run-id>/`, and the UI then shows the run as Crashed.
+  A Kubernetes work pool would add UI cancellation, schedules and retries at the
+  cost of a worker, a pool and a job template.
 - **Cleanup by ownership, with a label as escape hatch.** Compute Jobs are
   created at run time, so their names cannot be in the run folder. The flow pod
   receives its own name and UID through the downward API
   (`QCSC_OWNER_POD_NAME`, `QCSC_OWNER_POD_UID`), and `run_job_from_blocks` sets
   an `ownerReference` to it on every compute Job. Deleting the flow Job then
   garbage-collects them, even when the flow process never ran its own cleanup.
+  This was checked on EKS by deleting a run just after its compute Job started:
+  all related pods were removed.
   `blockOwnerDeletion` is not set, because it needs extra RBAC on clusters that
   enforce `OwnerReferencesPermissionEnforcement`. Every Job of the run also
   carries `qcsc-prefect/flow-run=<run-id>`, for

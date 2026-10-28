@@ -587,7 +587,7 @@ The launcher writes `runs/<run-id>/flow-job.yaml`, prints the commands below, an
 The Prefect credentials Secret, the service account and the PVC are shared between runs and are not part of the run folder.
 
 > [!NOTE]
-> The flow Job uses `backoffLimit: 0`, so a failed flow is never retried automatically and compute Jobs are not submitted twice. After `kubectl delete`, the flow run may stay in the `Running` state in the Prefect UI until Prefect marks it as crashed.
+> The flow Job uses `backoffLimit: 0`, so a failed flow is never retried automatically and compute Jobs are not submitted twice. After `kubectl delete`, the compute pods are removed with the flow pod, and the Prefect UI shows the flow run as `Crashed`. You cannot cancel the run from the Prefect UI.
 
 ---
 
