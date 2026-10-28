@@ -653,6 +653,7 @@ def _k8s_blocks(monkeypatch):
     hpc.kubernetes_work_mount_path = "/ldata"
     hpc.kubernetes_labels = {"team": "qc"}
     _patch_block_loading(monkeypatch, command, profile, hpc)
+    return hpc
 
 
 def _prepared_k8s_req(tmp_path: Path):
@@ -686,7 +687,13 @@ def test_kubernetes_compute_job_inherits_flow_run_label_and_owner_in_flow_pod(
 
 def test_kubernetes_compute_job_has_no_owner_outside_flow_pod(tmp_path: Path, monkeypatch):
     _k8s_blocks(monkeypatch)
-    for name in ("QCSC_FLOW_RUN_ID", "QCSC_OWNER_POD_NAME", "QCSC_OWNER_POD_UID"):
+    for name in (
+        "QCSC_FLOW_RUN_ID",
+        "QCSC_OWNER_POD_NAME",
+        "QCSC_OWNER_POD_UID",
+        "QCSC_HPC_PROFILE_BLOCK",
+        "QCSC_HPC_PROFILE_FINGERPRINT",
+    ):
         monkeypatch.delenv(name, raising=False)
 
     req = _prepared_k8s_req(tmp_path)
@@ -702,3 +709,41 @@ def test_kubernetes_owner_reference_needs_both_name_and_uid(tmp_path: Path, monk
     monkeypatch.delenv("QCSC_OWNER_POD_UID", raising=False)
 
     assert _prepared_k8s_req(tmp_path).owner_references == ()
+
+
+def _set_flow_pod_profile(monkeypatch, hpc, block_name: str = "hpc") -> None:
+    from qcsc_prefect_executor.kubernetes.flow_profile import (
+        flow_pod_settings,
+        settings_fingerprint,
+    )
+
+    monkeypatch.setenv("QCSC_HPC_PROFILE_BLOCK", block_name)
+    monkeypatch.setenv("QCSC_HPC_PROFILE_FINGERPRINT", settings_fingerprint(flow_pod_settings(hpc)))
+
+
+def test_flow_pod_accepts_the_launch_block_when_unchanged(tmp_path: Path, monkeypatch):
+    hpc = _k8s_blocks(monkeypatch)
+    _set_flow_pod_profile(monkeypatch, hpc)
+
+    assert _prepared_k8s_req(tmp_path).image == "qcsc-bitcount:latest"
+
+
+def test_flow_pod_rejects_a_job_that_uses_another_hpc_block(tmp_path: Path, monkeypatch):
+    import pytest
+
+    hpc = _k8s_blocks(monkeypatch)
+    _set_flow_pod_profile(monkeypatch, hpc, block_name="some-other-block")
+
+    with pytest.raises(ValueError, match="launched with hpc_profile_block 'some-other-block'"):
+        _prepared_k8s_req(tmp_path)
+
+
+def test_flow_pod_rejects_a_block_edited_after_render(tmp_path: Path, monkeypatch):
+    import pytest
+
+    hpc = _k8s_blocks(monkeypatch)
+    _set_flow_pod_profile(monkeypatch, hpc)
+    hpc.kubernetes_work_volume_claim = "edited-pvc"
+
+    with pytest.raises(ValueError, match="changed after this flow Job was rendered"):
+        _prepared_k8s_req(tmp_path)

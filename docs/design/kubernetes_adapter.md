@@ -96,14 +96,35 @@ Decisions:
   carries `qcsc-prefect/flow-run=<run-id>`, for
   `kubectl delete jobs -l qcsc-prefect/flow-run=<run-id>` if garbage collection
   misses something.
+- **One shared `HPCProfileBlock`.** The batch scheme requires the flow pod to
+  run on the same cluster, in the same namespace and with the same PVC as its
+  compute Jobs. The launcher therefore takes the pod settings from the block
+  and has no flags for them. The block is the flow command's own
+  `--hpc-profile-block`, so it is named once; the launcher's
+  `--hpc-profile-block` is needed only for a flow command that names none, and
+  a disagreement between the two is an error. It records the block
+  name (`QCSC_HPC_PROFILE_BLOCK`) and a fingerprint of the pod-level fields
+  (`QCSC_HPC_PROFILE_FINGERPRINT`) in the flow pod. `_prepare_job_from_blocks`
+  calls `verify_flow_pod_profile` for every job, so the pod rejects any job that
+  uses another block and any block edited after the manifest was rendered. The
+  fingerprint covers image, namespace, service account, pull policy and secrets,
+  node selector, tolerations, PVC and mount path. It leaves out fields that only
+  shape compute Jobs, which are read when each Job is created.
+- **One Prefect API.** At launch the laptop reads `PREFECT_API_URL` from the
+  Secret with `kubectl get secret` and requires it to equal the active Prefect
+  profile's URL, so both read the same blocks. The launcher fails without writing
+  a manifest when they differ, when the Secret cannot be read, or when it has no
+  `PREFECT_API_URL`. The pod's own `PREFECT_API_KEY` is not read or compared.
 - **No retry.** The flow Job uses `backoffLimit: 0`, because a retry would run
   the flow again and submit the compute Jobs a second time.
 - **Shared resources stay outside the run folder.** The Secret, service account,
   Role and PVC are reused by every run.
 
-Known limits: the flow pod needs permission to create Jobs, so whoever can
-launch a flow inherits it. The flow's code and virtual environment are taken
-from the shared volume, so syncing them is the user's job. Flows that need an
+Known limits: the launcher needs the Prefect API and `kubectl get secret`
+access at render time. A change to the Secret's contents after render is not
+detected. The flow pod needs permission to create Jobs, so whoever can launch a
+flow inherits it. The flow's code and virtual environment are taken from the
+shared volume, so syncing them is the user's job. Flows that need an
 interactive site login (an SSH one-time password, or an allow-listed source
 address) or per-iteration pod start-up in a tight loop do not fit this pattern.
 

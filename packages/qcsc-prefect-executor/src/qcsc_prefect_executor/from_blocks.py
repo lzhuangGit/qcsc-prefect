@@ -43,6 +43,7 @@ from qcsc_prefect_executor.bulk.models import (
 from qcsc_prefect_executor.bulk.native_manifest import create_native_bulk_group_manifests
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
 from qcsc_prefect_executor.fugaku.run import run_fugaku_job
+from qcsc_prefect_executor.kubernetes.flow_profile import verify_flow_pod_profile
 from qcsc_prefect_executor.local.run import run_local_job
 from qcsc_prefect_executor.miyabi.run import run_miyabi_job
 from qcsc_prefect_executor.slurm.run import run_slurm_job
@@ -530,6 +531,7 @@ async def _prepare_job_from_blocks(
     command_block = await _load_block(CommandBlock, command_block_name)
     execution_profile_block = await _load_block(ExecutionProfileBlock, execution_profile_block_name)
     hpc_block = await _load_block(HPCProfileBlock, hpc_profile_block_name)
+    verify_flow_pod_profile(hpc_block, hpc_profile_block_name)
 
     if execution_profile_block.command_name != command_block.command_name:
         raise ValueError(

@@ -513,9 +513,14 @@ flowchart LR
 ### Prerequisites
 
 - Steps 1 to 5 are done: the repository and virtual environment are on the shared volume, and the blocks exist.
-- `kubectl` on your laptop points at the cluster, and the launcher is installed there: `pip install -e packages/qcsc-prefect-executor` (it needs no cluster access of its own).
-- The flow pod uses the same `qcsc-prefect-runner` service account as the runner pod, so it may create Jobs.
-- Store the Prefect credentials in a Secret in the flow's namespace. The compute Jobs do not need it.
+- `kubectl` on your laptop points at the cluster and can read Secrets in the block's namespace.
+- The launcher and the packages it imports are installed on the laptop, and your active Prefect profile points at the same Prefect API as the flow pod will use:
+  ```bash
+  uv pip install -e packages/qcsc-prefect-core -e "packages/qcsc-prefect-adapters[kubernetes]" \
+    -e packages/qcsc-prefect-blocks -e packages/qcsc-prefect-executor
+  ```
+- The `HPCProfileBlock` sets `kubernetes_image`, `kubernetes_namespace`, `kubernetes_service_account_name` (a service account that may create Jobs, such as `qcsc-prefect-runner`), `kubernetes_work_volume_claim` and `kubernetes_work_mount_path`. The flow pod is built from this block.
+- Store the Prefect credentials in a Secret in the block's namespace. The compute Jobs do not need it.
 
 ```bash
 kubectl create secret generic prefect-credentials \
@@ -524,17 +529,12 @@ kubectl create secret generic prefect-credentials \
 ```
 
 > [!IMPORTANT]
-> `--work-dir` must be inside the PVC mount path as the pods see it. The launcher and the Job builder reject a work directory outside `--work-mount-path`, because that directory does not exist in the pod. If the blocks use `/data/qcsc-prefect`, mount the PVC there in the flow pod too.
+> `--work-dir` must be inside the PVC mount path as the pods see it. The launcher and the Job builder reject a work directory outside the block's `kubernetes_work_mount_path`, because that directory does not exist in the pod.
 
 ### Launch
 
 ```bash
 python -m qcsc_prefect_executor.kubernetes.flow_launcher \
-  --image qcsc-hpc-base:latest \
-  --namespace default \
-  --work-volume-claim qcsc-shared-pvc \
-  --work-mount-path /data/qcsc-prefect \
-  --service-account qcsc-prefect-runner \
   --env-from-secret prefect-credentials \
   -- /data/qcsc-prefect/.venv/bin/python \
      /data/qcsc-prefect/examples/prefect_bitcount_demo/flow_optimized.py \
@@ -546,16 +546,32 @@ python -m qcsc_prefect_executor.kubernetes.flow_launcher \
      --work-dir /data/qcsc-prefect/work/bitcount_k8s
 ```
 
-Everything after `--` is the flow command, so the launcher works for any flow, not only BitCount. Add `--node-selector`, `--toleration` or `--image-pull-secret` if your cluster needs them.
+Everything after `--` is the flow command, so the launcher works for any flow, not only BitCount. Copy the command with its trailing `\` characters; a pasted line break ends the command early.
+
+### One profile block for the flow pod and its Jobs
+
+The flow pod must run on the same cluster, in the same namespace and with the same PVC as the compute Jobs it creates. The launcher therefore takes the image, namespace, service account, node selector, tolerations, pull settings and shared volume from the `HPCProfileBlock`, and has no flags for those values.
+
+You name the block once. The launcher reads it from the `--hpc-profile-block` in the flow command. Pass the launcher's own `--hpc-profile-block NAME` before the `--` only if the flow command does not name a block; the launcher stops with an error if neither does, or if both name different blocks. The block must have `hpc_target="kubernetes"`, `kubernetes_image`, `kubernetes_work_volume_claim` and `kubernetes_work_mount_path`, or the launcher stops.
+
+Three checks keep the flow pod and the compute Jobs consistent:
+
+| Check | When | What happens on a mismatch |
+|---|---|---|
+| Same Prefect API | At launch, on the laptop | The launcher reads `PREFECT_API_URL` from the Secret named by `--env-from-secret` with `kubectl get secret`, and compares it with your active Prefect profile. If they differ, it prints both URLs and the profile name, and writes nothing. Fix it with `prefect profile use <name>` or by updating the Secret. |
+| Same block name | At launch, and in the pod | If the launcher's `--hpc-profile-block` differs from the flow command's, the launcher stops. In the pod, the flow raises an error for any job whose effective `hpc_profile_block` is another block, including per-job overrides in bulk runs. |
+| Block not edited since render | In the pod, before the first Job | The launcher stores a fingerprint of the pod-level block fields in the manifest (`QCSC_HPC_PROFILE_FINGERPRINT`). If you edit those fields in Prefect and then run `kubectl apply` on the old YAML, the flow fails before it creates any Job and tells you to launch again. Fields that only affect the compute Jobs (CPU, memory, labels) are not part of the fingerprint. |
+
+Because the last check runs in the pod, a plain `kubectl apply -f runs/<run-id>/` is safe, even days after the YAML was rendered.
 
 The launcher writes `runs/<run-id>/flow-job.yaml`, prints the commands below, and asks whether to launch it. Pass `--launch` or `--no-launch` to skip the question. Without a terminal and without either flag, it writes the file and does not launch.
 
 | Action | Command |
 |---|---|
 | Start | `kubectl apply -f runs/<run-id>/` |
-| Follow logs | `kubectl logs -n default -f job/<run-id>` |
+| Follow logs | `kubectl logs -n <namespace> -f job/<run-id>` |
 | Stop and clean up | `kubectl delete -f runs/<run-id>/` |
-| Fallback cleanup | `kubectl delete jobs -n default -l qcsc-prefect/flow-run=<run-id>` |
+| Fallback cleanup | `kubectl delete jobs -n <namespace> -l qcsc-prefect/flow-run=<run-id>` |
 
 ### How cleanup works
 
