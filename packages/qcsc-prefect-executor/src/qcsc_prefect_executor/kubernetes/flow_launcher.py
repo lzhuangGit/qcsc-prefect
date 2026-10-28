@@ -7,6 +7,9 @@ machine with ``kubectl``) to render the Job manifest into
 
 The flow pod is configured from the same ``HPCProfileBlock`` that its compute
 Jobs use, so both always run in the same cluster, namespace and shared volume.
+Its service account is the exception: the flow pod must be allowed to create
+Jobs, the compute pods must not be, so ``--service-account`` is a required option
+of the launcher and the block's service account applies to compute Jobs only.
 The block is the ``--hpc-profile-block`` of the flow command; pass the launcher's
 own ``--hpc-profile-block`` only when the flow command does not name one. Two
 safeguards back this up:
@@ -29,6 +32,7 @@ Cleanup is two-layered:
 Example::
 
     python -m qcsc_prefect_executor.kubernetes.flow_launcher \\
+        --service-account qcsc-prefect-runner \\
         --env-from-secret prefect-credentials \\
         -- /ldata/qcsc-prefect/.venv/bin/python \\
            /ldata/qcsc-prefect/examples/prefect_bitcount_demo/flow_optimized.py \\
@@ -223,6 +227,7 @@ def build_flow_job_manifest(
     hpc_block: Any,
     hpc_profile_block_name: str,
     run_id: str,
+    service_account_name: str,
     prefect_api_url: str | None = None,
     working_dir: str | None = None,
     env_from_secrets: Sequence[str] = (),
@@ -231,8 +236,10 @@ def build_flow_job_manifest(
 ) -> dict[str, Any]:
     """Build the ``batch/v1`` Job that runs a flow command in a pod.
 
-    Image, namespace, service account, node placement and the shared volume come
-    from ``hpc_block``. The pod receives ``QCSC_FLOW_RUN_ID`` and, through the
+    Image, namespace, node placement and the shared volume come from
+    ``hpc_block``. ``service_account_name`` is given separately, because the flow
+    pod needs rights to create Jobs that the compute pods should not have. The pod
+    receives ``QCSC_FLOW_RUN_ID`` and, through the
     downward API, its own name and UID, which
     `qcsc_prefect_executor.from_blocks.run_job_from_blocks` uses to label the
     compute Jobs it creates and to make the flow pod their owner. It also receives
@@ -247,6 +254,8 @@ def build_flow_job_manifest(
 
     if not command:
         raise ValueError("A flow command is required after '--'.")
+    if not service_account_name:
+        raise ValueError("A service account is required: the flow pod must be able to create Jobs.")
     validate_flow_block(hpc_block, hpc_profile_block_name)
     settings = flow_pod_settings(hpc_block)
     fingerprint = settings_fingerprint(settings)
@@ -268,7 +277,7 @@ def build_flow_job_manifest(
         executable=command[0],
         namespace=settings["namespace"] or "default",
         job_name=run_id,
-        service_account_name=settings["service_account_name"],
+        service_account_name=service_account_name,
         image_pull_policy=settings["image_pull_policy"],
         image_pull_secrets=tuple(settings["image_pull_secrets"]),
         node_selector=settings["node_selector"],
@@ -322,7 +331,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Render (and optionally launch) a Kubernetes Job that runs a Prefect flow. "
         "The flow pod is configured from the HPCProfileBlock named in the flow command.",
-        usage="%(prog)s --env-from-secret SECRET [--hpc-profile-block NAME] [options] "
+        usage="%(prog)s --service-account NAME --env-from-secret SECRET "
+        "[--hpc-profile-block NAME] [options] "
         "-- FLOW_COMMAND [ARGS...]",
     )
     parser.add_argument(
@@ -331,6 +341,14 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="HPCProfileBlock shared by this flow pod and its compute Jobs. Taken from the "
         f"flow command's own {_BLOCK_FLAG} when it has one; needed only when it does not.",
+    )
+    parser.add_argument(
+        "--service-account",
+        required=True,
+        metavar="NAME",
+        help="Service account of the flow pod. It must be allowed to create Jobs (for example "
+        "qcsc-prefect-runner). It is not taken from the profile block, so the compute pods can "
+        "run with fewer rights.",
     )
     parser.add_argument(
         "--env-from-secret",
@@ -407,6 +425,7 @@ def main(
         hpc_block=hpc_block,
         hpc_profile_block_name=block_name,
         run_id=run_id,
+        service_account_name=args.service_account,
         prefect_api_url=api_url,
         working_dir=args.working_dir,
         env_from_secrets=args.env_from_secret,
@@ -418,6 +437,7 @@ def main(
     kubectl = shlex.join(_kubectl(args.context))
     print(f"Wrote {path}")
     print(f"  Block:   {block_name} (settings captured now; the flow re-checks them)")
+    print(f"  Account: {args.service_account} (flow pod only; compute Jobs use the block's)")
     print(f"  Prefect: {api_url}")
     print(f"  Start:   {kubectl} apply -f {run_dir}/")
     print(f"  Logs:    {kubectl} logs -n {namespace} -f job/{run_id}")

@@ -28,13 +28,14 @@ def flow_pod_settings(hpc_block: Any) -> dict[str, Any]:
 
     Fields that only shape the compute Jobs (CPU, memory, labels, and so on) are
     left out: they are read when each compute Job is created, so editing them
-    between render and run is harmless.
+    between render and run is harmless. That includes the block's service
+    account: the flow pod gets its own from the launcher's ``--service-account``
+    (it needs rights to create Jobs), while compute Jobs keep the block's.
     """
 
     return {
         "image": getattr(hpc_block, "kubernetes_image", None),
         "namespace": getattr(hpc_block, "kubernetes_namespace", None),
-        "service_account_name": getattr(hpc_block, "kubernetes_service_account_name", None),
         "image_pull_policy": getattr(hpc_block, "kubernetes_image_pull_policy", None),
         "image_pull_secrets": list(getattr(hpc_block, "kubernetes_image_pull_secrets", ()) or ()),
         "node_selector": dict(getattr(hpc_block, "kubernetes_node_selector", {}) or {}),

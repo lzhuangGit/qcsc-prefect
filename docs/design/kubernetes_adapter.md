@@ -99,7 +99,10 @@ Decisions:
 - **One shared `HPCProfileBlock`.** The batch scheme requires the flow pod to
   run on the same cluster, in the same namespace and with the same PVC as its
   compute Jobs. The launcher therefore takes the pod settings from the block
-  and has no flags for them. The block is the flow command's own
+  and has no flags for them, except the service account. The flow pod needs
+  rights to create Jobs and the compute pods must not inherit them, so
+  `--service-account` is a required launcher option and the block's
+  `kubernetes_service_account_name` applies to compute pods only. The block is the flow command's own
   `--hpc-profile-block`, so it is named once; the launcher's
   `--hpc-profile-block` is needed only for a flow command that names none, and
   a disagreement between the two is an error. It records the block
@@ -107,8 +110,8 @@ Decisions:
   (`QCSC_HPC_PROFILE_FINGERPRINT`) in the flow pod. `_prepare_job_from_blocks`
   calls `verify_flow_pod_profile` for every job, so the pod rejects any job that
   uses another block and any block edited after the manifest was rendered. The
-  fingerprint covers image, namespace, service account, pull policy and secrets,
-  node selector, tolerations, PVC and mount path. It leaves out fields that only
+  fingerprint covers image, namespace, pull policy and secrets, node selector,
+  tolerations, PVC and mount path. It leaves out fields that only
   shape compute Jobs, which are read when each Job is created.
 - **One Prefect API.** At launch the laptop reads `PREFECT_API_URL` from the
   Secret with `kubectl get secret` and requires it to equal the active Prefect

@@ -519,7 +519,8 @@ flowchart LR
   uv pip install -e packages/qcsc-prefect-core -e "packages/qcsc-prefect-adapters[kubernetes]" \
     -e packages/qcsc-prefect-blocks -e packages/qcsc-prefect-executor
   ```
-- The `HPCProfileBlock` sets `kubernetes_image`, `kubernetes_namespace`, `kubernetes_service_account_name` (a service account that may create Jobs, such as `qcsc-prefect-runner`), `kubernetes_work_volume_claim` and `kubernetes_work_mount_path`. The flow pod is built from this block.
+- The `HPCProfileBlock` sets `kubernetes_image`, `kubernetes_namespace`, `kubernetes_work_volume_claim` and `kubernetes_work_mount_path`. The flow pod is built from this block.
+- The flow pod needs a service account that may create Jobs, such as `qcsc-prefect-runner`. You pass it to the launcher with `--service-account`. Leave `kubernetes_service_account_name` on the block empty or set it to an account without Job rights, so the compute pods do not inherit Job-create access.
 - Store the Prefect credentials in a Secret in the block's namespace. The compute Jobs do not need it.
 
 ```bash
@@ -535,6 +536,7 @@ kubectl create secret generic prefect-credentials \
 
 ```bash
 python -m qcsc_prefect_executor.kubernetes.flow_launcher \
+  --service-account qcsc-prefect-runner \
   --env-from-secret prefect-credentials \
   -- /data/qcsc-prefect/.venv/bin/python \
      /data/qcsc-prefect/examples/prefect_bitcount_demo/flow_optimized.py \
@@ -550,7 +552,9 @@ Everything after `--` is the flow command, so the launcher works for any flow, n
 
 ### One profile block for the flow pod and its Jobs
 
-The flow pod must run on the same cluster, in the same namespace and with the same PVC as the compute Jobs it creates. The launcher therefore takes the image, namespace, service account, node selector, tolerations, pull settings and shared volume from the `HPCProfileBlock`, and has no flags for those values.
+The flow pod must run on the same cluster, in the same namespace and with the same PVC as the compute Jobs it creates. The launcher therefore takes the image, namespace, node selector, tolerations, pull settings and shared volume from the `HPCProfileBlock`, and has no flags for those values.
+
+The service account is the one exception. The flow pod must be able to create Jobs, but the compute pods only run a program, so they should not have that right. `--service-account` is therefore a required launcher option and is not read from the block. The block's `kubernetes_service_account_name` applies to the compute pods only, and changing it does not count as an edited block.
 
 You name the block once. The launcher reads it from the `--hpc-profile-block` in the flow command. Pass the launcher's own `--hpc-profile-block NAME` before the `--` only if the flow command does not name a block; the launcher stops with an error if neither does, or if both name different blocks. The block must have `hpc_target="kubernetes"`, `kubernetes_image`, `kubernetes_work_volume_claim` and `kubernetes_work_mount_path`, or the launcher stops.
 

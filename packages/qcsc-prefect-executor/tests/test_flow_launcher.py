@@ -14,6 +14,8 @@ from qcsc_prefect_executor.kubernetes.flow_profile import (
 
 API_URL = "https://api.prefect.cloud/api/accounts/a/workspaces/w"
 BASE_ARGS = [
+    "--service-account",
+    "qcsc-prefect-runner",
     "--env-from-secret",
     "prefect-credentials",
     "--run-id",
@@ -27,7 +29,7 @@ def _block(**overrides) -> SimpleNamespace:
         "hpc_target": "kubernetes",
         "kubernetes_image": "qcsc-hpc-base:latest",
         "kubernetes_namespace": "qcsc",
-        "kubernetes_service_account_name": "qcsc-prefect-runner",
+        "kubernetes_service_account_name": None,
         "kubernetes_image_pull_policy": "IfNotPresent",
         "kubernetes_image_pull_secrets": [],
         "kubernetes_node_selector": {"use": "infra", "arch": "arm64"},
@@ -222,6 +224,30 @@ def test_kubectl_failure_code_is_returned(tmp_path: Path):
 def test_missing_flow_command_is_rejected(tmp_path: Path):
     with pytest.raises(ValueError, match="flow command"):
         _main(tmp_path, ["--no-launch"], command=[])
+
+
+def test_service_account_is_required():
+    with pytest.raises(SystemExit):
+        mod.main(
+            ["--env-from-secret", "s", "--", "python", "flow.py", "--hpc-profile-block", "b"],
+            interactive=False,
+        )
+
+
+def test_flow_pod_uses_the_launcher_service_account_not_the_blocks(tmp_path: Path):
+    _main(tmp_path, ["--no-launch"], block=_block(kubernetes_service_account_name="compute-sa"))
+
+    pod = _manifest(tmp_path)["spec"]["template"]["spec"]
+    assert pod["serviceAccountName"] == "qcsc-prefect-runner"
+
+
+def test_block_service_account_is_not_part_of_the_flow_pod_fingerprint():
+    assert "service_account_name" not in flow_pod_settings(
+        _block(kubernetes_service_account_name="compute-sa")
+    )
+    assert settings_fingerprint(flow_pod_settings(_block())) == settings_fingerprint(
+        flow_pod_settings(_block(kubernetes_service_account_name="compute-sa"))
+    )
 
 
 def test_flags_that_duplicate_block_fields_are_gone():

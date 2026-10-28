@@ -50,7 +50,6 @@ def test_fingerprint_is_stable_and_order_independent():
     [
         {"kubernetes_image": "img:2"},
         {"kubernetes_namespace": "other"},
-        {"kubernetes_service_account_name": "other"},
         {"kubernetes_node_selector": {"arch": "amd64"}},
         {"kubernetes_tolerations": [{"key": "k"}]},
         {"kubernetes_work_volume_claim": "other-pvc"},
@@ -65,7 +64,12 @@ def test_fingerprint_changes_when_a_flow_pod_field_changes(change):
 
 @pytest.mark.parametrize(
     "change",
-    [{"kubernetes_cpu": "8"}, {"kubernetes_memory": "32Gi"}, {"kubernetes_labels": {"a": "b"}}],
+    [
+        {"kubernetes_cpu": "8"},
+        {"kubernetes_memory": "32Gi"},
+        {"kubernetes_labels": {"a": "b"}},
+        {"kubernetes_service_account_name": "other"},
+    ],
 )
 def test_fingerprint_ignores_compute_job_only_fields(change):
     assert settings_fingerprint(flow_pod_settings(_block())) == settings_fingerprint(
