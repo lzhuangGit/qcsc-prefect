@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -570,7 +571,21 @@ async def _prepare_job_from_blocks(
     if submission_target.hpc_target == "local":
         req = LocalJobRequest(executable=executable)
     elif submission_target.hpc_target == "kubernetes":
-        from qcsc_prefect_adapters.kubernetes.builder import KubernetesJobRequest
+        from qcsc_prefect_adapters.kubernetes.builder import (
+            FLOW_RUN_ID_ENV,
+            FLOW_RUN_LABEL,
+            OWNER_POD_NAME_ENV,
+            OWNER_POD_UID_ENV,
+            KubernetesJobRequest,
+            pod_owner_reference,
+        )
+
+        # Present only inside a flow pod started by the flow launcher. Compute
+        # Jobs then carry the flow-run label and are owned by the flow pod, so
+        # deleting the flow Job also deletes them.
+        flow_run_id = os.environ.get(FLOW_RUN_ID_ENV)
+        owner_pod_name = os.environ.get(OWNER_POD_NAME_ENV)
+        owner_pod_uid = os.environ.get(OWNER_POD_UID_ENV)
 
         image = getattr(hpc_block, "kubernetes_image", None)
         if not image:
@@ -592,7 +607,10 @@ async def _prepare_job_from_blocks(
             extra_resources=dict(getattr(hpc_block, "kubernetes_extra_resources", {}) or {}),
             node_selector=dict(getattr(hpc_block, "kubernetes_node_selector", {}) or {}),
             tolerations=tuple(getattr(hpc_block, "kubernetes_tolerations", ()) or ()),
-            labels=dict(getattr(hpc_block, "kubernetes_labels", {}) or {}),
+            labels={
+                **dict(getattr(hpc_block, "kubernetes_labels", {}) or {}),
+                **({FLOW_RUN_LABEL: flow_run_id} if flow_run_id else {}),
+            },
             annotations=dict(getattr(hpc_block, "kubernetes_annotations", {}) or {}),
             backoff_limit=getattr(hpc_block, "kubernetes_backoff_limit", 0) or 0,
             ttl_seconds_after_finished=getattr(
@@ -606,6 +624,11 @@ async def _prepare_job_from_blocks(
             work_volume_claim=getattr(hpc_block, "kubernetes_work_volume_claim", None),
             work_mount_path=getattr(hpc_block, "kubernetes_work_mount_path", None),
             working_dir=str(resolved_work_dir),
+            owner_references=(
+                (pod_owner_reference(name=owner_pod_name, uid=owner_pod_uid),)
+                if owner_pod_name and owner_pod_uid
+                else ()
+            ),
         )
     elif submission_target.hpc_target == "miyabi":
         req = MiyabiJobRequest(

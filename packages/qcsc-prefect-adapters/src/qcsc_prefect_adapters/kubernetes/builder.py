@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import Any
 
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
@@ -12,6 +13,11 @@ JOB_NAME_LABEL = "job-name"
 MANAGED_BY_LABEL = "app.kubernetes.io/managed-by"
 MANAGED_BY_VALUE = "qcsc-prefect"
 WORK_VOLUME_NAME = "qcsc-work"
+FLOW_RUN_LABEL = "qcsc-prefect/flow-run"
+# Set in a flow pod by the flow launcher; compute Jobs it creates inherit them.
+FLOW_RUN_ID_ENV = "QCSC_FLOW_RUN_ID"
+OWNER_POD_NAME_ENV = "QCSC_OWNER_POD_NAME"
+OWNER_POD_UID_ENV = "QCSC_OWNER_POD_UID"
 
 _DNS_LABEL_MAX = 63
 _JOB_NAME_MAX = 52  # Kubernetes appends a suffix to pod names; stay well under 63.
@@ -58,6 +64,16 @@ class KubernetesJobRequest:
             on both sides.
         working_dir: Optional explicit working directory for the container.
             Defaults to ``work_mount_path`` when ``work_volume_claim`` is set.
+            When ``work_volume_claim`` is set it must be inside
+            ``work_mount_path``, otherwise the directory does not exist on the
+            shared volume in the pod.
+        env_from_secrets: Names of Secrets whose keys are all exposed as
+            environment variables (``envFrom``/``secretRef``).
+        extra_env: Raw container ``env`` entries, for values that cannot be
+            plain strings such as downward-API ``valueFrom`` references.
+        owner_references: Raw ``ownerReferences`` for the Job. Kubernetes
+            garbage-collects the Job when its owner is deleted. The owner must
+            be in the same namespace as the Job.
     """
 
     image: str
@@ -82,6 +98,20 @@ class KubernetesJobRequest:
     work_volume_claim: str | None = None
     work_mount_path: str | None = None
     working_dir: str | None = None
+    env_from_secrets: tuple[str, ...] = ()
+    extra_env: tuple[dict[str, Any], ...] = ()
+    owner_references: tuple[dict[str, Any], ...] = ()
+
+
+def pod_owner_reference(*, name: str, uid: str) -> dict[str, Any]:
+    """Build an ``ownerReferences`` entry that points at a Pod.
+
+    ``blockOwnerDeletion`` is deliberately omitted: setting it requires extra
+    RBAC on clusters that enforce ``OwnerReferencesPermissionEnforcement``, and
+    cascading deletion works without it.
+    """
+
+    return {"apiVersion": "v1", "kind": "Pod", "name": name, "uid": uid}
 
 
 def sanitize_job_name(name: str) -> str:
@@ -168,8 +198,12 @@ def build_job_manifest(
         "image": req.image,
         "command": command,
     }
-    if env:
-        container["env"] = [{"name": str(k), "value": str(v)} for k, v in env.items()]
+    env_entries: list[dict[str, Any]] = [{"name": str(k), "value": str(v)} for k, v in env.items()]
+    env_entries.extend(dict(e) for e in req.extra_env)
+    if env_entries:
+        container["env"] = env_entries
+    if req.env_from_secrets:
+        container["envFrom"] = [{"secretRef": {"name": s}} for s in req.env_from_secrets]
     if req.image_pull_policy:
         container["imagePullPolicy"] = req.image_pull_policy
 
@@ -187,6 +221,15 @@ def build_job_manifest(
     if req.work_volume_claim:
         if not req.work_mount_path or not req.work_mount_path.startswith("/"):
             raise ValueError("work_volume_claim requires an absolute work_mount_path.")
+        if req.working_dir and not PurePosixPath(req.working_dir).is_relative_to(
+            PurePosixPath(req.work_mount_path)
+        ):
+            raise ValueError(
+                f"working_dir {req.working_dir!r} is not inside work_mount_path "
+                f"{req.work_mount_path!r}. The Job pod mounts the shared volume only at "
+                f"{req.work_mount_path!r}, so that directory would not exist there. "
+                "Use a work directory under the mount path."
+            )
         volumes.append(
             {
                 "name": WORK_VOLUME_NAME,
@@ -227,9 +270,13 @@ def build_job_manifest(
     if req.ttl_seconds_after_finished is not None:
         job_spec["ttlSecondsAfterFinished"] = req.ttl_seconds_after_finished
 
+    job_metadata: dict[str, Any] = {"name": name, "namespace": req.namespace, **metadata}
+    if req.owner_references:
+        job_metadata["ownerReferences"] = [dict(o) for o in req.owner_references]
+
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
-        "metadata": {"name": name, "namespace": req.namespace, **metadata},
+        "metadata": job_metadata,
         "spec": job_spec,
     }

@@ -65,6 +65,48 @@ laptop is only a UI. A worker outside the cluster also works at the API level
 (use a kubeconfig), but it cannot share a PVC with the job pods, so the
 file-based data flow in this document does not apply to it.
 
+### Flow runs as a batch Job
+
+A flow that fans out to compute Jobs always runs in a pod in the cluster. An
+interactive session runs it from a shell in the runner (or GUI) pod. A
+non-interactive run is launched as a `batch/v1` Job by
+`qcsc_prefect_executor.kubernetes.flow_launcher`, which renders
+`runs/<run-id>/flow-job.yaml` and either applies it or leaves it for the user,
+after a prompt. The flow command is arbitrary, so the pattern applies to any
+flow whose main process controls work in other pods.
+
+Decisions:
+
+- **No work pool or deployment.** The flow starts with Prefect credentials from
+  a Secret (`envFrom`) and is expected to appear in the Prefect UI as an ad hoc
+  run. The expected trade-off is that a run cannot be cancelled from the Prefect
+  UI, because nothing in the cluster listens for the cancellation. The user
+  stops a run with `kubectl delete -f runs/<run-id>/`. A Kubernetes work pool
+  would add UI cancellation, schedules and retries at the cost of a worker, a
+  pool and a job template. Neither the UI behavior nor the state a deleted run
+  is left in has been verified on a real cluster yet.
+- **Cleanup by ownership, with a label as escape hatch.** Compute Jobs are
+  created at run time, so their names cannot be in the run folder. The flow pod
+  receives its own name and UID through the downward API
+  (`QCSC_OWNER_POD_NAME`, `QCSC_OWNER_POD_UID`), and `run_job_from_blocks` sets
+  an `ownerReference` to it on every compute Job. Deleting the flow Job then
+  garbage-collects them, even when the flow process never ran its own cleanup.
+  `blockOwnerDeletion` is not set, because it needs extra RBAC on clusters that
+  enforce `OwnerReferencesPermissionEnforcement`. Every Job of the run also
+  carries `qcsc-prefect/flow-run=<run-id>`, for
+  `kubectl delete jobs -l qcsc-prefect/flow-run=<run-id>` if garbage collection
+  misses something.
+- **No retry.** The flow Job uses `backoffLimit: 0`, because a retry would run
+  the flow again and submit the compute Jobs a second time.
+- **Shared resources stay outside the run folder.** The Secret, service account,
+  Role and PVC are reused by every run.
+
+Known limits: the flow pod needs permission to create Jobs, so whoever can
+launch a flow inherits it. The flow's code and virtual environment are taken
+from the shared volume, so syncing them is the user's job. Flows that need an
+interactive site login (an SSH one-time password, or an allow-listed source
+address) or per-iteration pod start-up in a tight loop do not fit this pattern.
+
 ## Components
 
 The adapter follows the layering used by the other targets.
@@ -124,6 +166,13 @@ fits Prefect's async execution model. The dependency is optional:
 publishes a Prefect table artifact and returns a `KubernetesRunResult`.
 Log retrieval is best-effort: a failure to read logs is a warning, because the
 Job result is authoritative.
+
+### Working directory check
+
+When `work_volume_claim` is set, `build_job_manifest` rejects a `working_dir`
+that is not inside `work_mount_path`. The pod mounts the volume only at that
+path, so the directory would not exist there, and the Job would fail at
+container start instead of at submission.
 
 ### Required RBAC
 

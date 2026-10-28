@@ -6,6 +6,7 @@ from qcsc_prefect_adapters.kubernetes.builder import (
     build_job_manifest,
     build_kubernetes_command,
     parse_walltime_seconds,
+    pod_owner_reference,
     sanitize_job_name,
 )
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
@@ -191,3 +192,76 @@ def test_parse_walltime_seconds():
     assert parse_walltime_seconds("05:00") == 300
     with pytest.raises(ValueError):
         parse_walltime_seconds("soon")
+
+
+def test_manifest_env_from_secrets_extra_env_and_owner_reference():
+    profile = _profile(environments={"FOO": "bar"})
+    req = KubernetesJobRequest(
+        image="img",
+        executable="/x",
+        env_from_secrets=("prefect-credentials",),
+        extra_env=({"name": "POD_UID", "valueFrom": {"fieldRef": {"fieldPath": "metadata.uid"}}},),
+        owner_references=(pod_owner_reference(name="flow-pod", uid="abc-123"),),
+    )
+
+    manifest = build_job_manifest(exec_profile=profile, req=req)
+
+    container = manifest["spec"]["template"]["spec"]["containers"][0]
+    assert container["envFrom"] == [{"secretRef": {"name": "prefect-credentials"}}]
+    assert container["env"] == [
+        {"name": "FOO", "value": "bar"},
+        {"name": "POD_UID", "valueFrom": {"fieldRef": {"fieldPath": "metadata.uid"}}},
+    ]
+    assert manifest["metadata"]["ownerReferences"] == [
+        {"apiVersion": "v1", "kind": "Pod", "name": "flow-pod", "uid": "abc-123"}
+    ]
+    assert "blockOwnerDeletion" not in manifest["metadata"]["ownerReferences"][0]
+
+
+def test_manifest_omits_new_fields_by_default():
+    manifest = build_job_manifest(
+        exec_profile=_profile(), req=KubernetesJobRequest(image="img", executable="/x")
+    )
+
+    assert "ownerReferences" not in manifest["metadata"]
+    assert "envFrom" not in manifest["spec"]["template"]["spec"]["containers"][0]
+
+
+def test_working_dir_outside_mount_path_is_rejected():
+    req = KubernetesJobRequest(
+        image="img",
+        executable="/x",
+        work_volume_claim="shared-rwx",
+        work_mount_path="/ldata",
+        working_dir="/data/qcsc-prefect/work/job_1",
+    )
+
+    with pytest.raises(ValueError, match="not inside work_mount_path"):
+        build_job_manifest(exec_profile=_profile(), req=req)
+
+
+def test_working_dir_prefix_lookalike_is_rejected():
+    req = KubernetesJobRequest(
+        image="img",
+        executable="/x",
+        work_volume_claim="shared-rwx",
+        work_mount_path="/data",
+        working_dir="/data-other/job",
+    )
+
+    with pytest.raises(ValueError, match="not inside work_mount_path"):
+        build_job_manifest(exec_profile=_profile(), req=req)
+
+
+def test_working_dir_equal_to_mount_path_is_accepted():
+    req = KubernetesJobRequest(
+        image="img",
+        executable="/x",
+        work_volume_claim="shared-rwx",
+        work_mount_path="/data",
+        working_dir="/data",
+    )
+
+    manifest = build_job_manifest(exec_profile=_profile(), req=req)
+
+    assert manifest["spec"]["template"]["spec"]["containers"][0]["workingDir"] == "/data"

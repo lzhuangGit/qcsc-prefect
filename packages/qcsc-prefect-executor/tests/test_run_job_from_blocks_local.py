@@ -633,3 +633,72 @@ def test_run_job_from_blocks_kubernetes_missing_image_raises(tmp_path: Path, mon
                 work_dir=tmp_path,
             )
         )
+
+
+def _k8s_blocks(monkeypatch):
+    command = _CommandBlockStub("bitcount-hist", "bitcount_hist", [])
+    profile = _ExecutionProfileBlockStub(
+        profile_name="bitcount-k8s",
+        command_name="bitcount-hist",
+        launcher="single",
+        num_nodes=1,
+        mpiprocs=1,
+    )
+    hpc = _HPCProfileBlockStub(
+        hpc_target="kubernetes",
+        executable_map={"bitcount_hist": "/ldata/bin/get_counts_hist"},
+    )
+    hpc.kubernetes_image = "qcsc-bitcount:latest"
+    hpc.kubernetes_work_volume_claim = "qcsc-pvc"
+    hpc.kubernetes_work_mount_path = "/ldata"
+    hpc.kubernetes_labels = {"team": "qc"}
+    _patch_block_loading(monkeypatch, command, profile, hpc)
+
+
+def _prepared_k8s_req(tmp_path: Path):
+    prepared = asyncio.run(
+        mod._prepare_job_from_blocks(
+            command_block_name="cmd",
+            execution_profile_block_name="exec",
+            hpc_profile_block_name="hpc",
+            work_dir=tmp_path,
+            script_filename=None,
+        )
+    )
+    return prepared.req
+
+
+def test_kubernetes_compute_job_inherits_flow_run_label_and_owner_in_flow_pod(
+    tmp_path: Path, monkeypatch
+):
+    _k8s_blocks(monkeypatch)
+    monkeypatch.setenv("QCSC_FLOW_RUN_ID", "flow-1234abcd")
+    monkeypatch.setenv("QCSC_OWNER_POD_NAME", "flow-1234abcd-xyz")
+    monkeypatch.setenv("QCSC_OWNER_POD_UID", "uid-1")
+
+    req = _prepared_k8s_req(tmp_path)
+
+    assert req.labels == {"team": "qc", "qcsc-prefect/flow-run": "flow-1234abcd"}
+    assert req.owner_references == (
+        {"apiVersion": "v1", "kind": "Pod", "name": "flow-1234abcd-xyz", "uid": "uid-1"},
+    )
+
+
+def test_kubernetes_compute_job_has_no_owner_outside_flow_pod(tmp_path: Path, monkeypatch):
+    _k8s_blocks(monkeypatch)
+    for name in ("QCSC_FLOW_RUN_ID", "QCSC_OWNER_POD_NAME", "QCSC_OWNER_POD_UID"):
+        monkeypatch.delenv(name, raising=False)
+
+    req = _prepared_k8s_req(tmp_path)
+
+    assert req.labels == {"team": "qc"}
+    assert req.owner_references == ()
+
+
+def test_kubernetes_owner_reference_needs_both_name_and_uid(tmp_path: Path, monkeypatch):
+    _k8s_blocks(monkeypatch)
+    monkeypatch.delenv("QCSC_FLOW_RUN_ID", raising=False)
+    monkeypatch.setenv("QCSC_OWNER_POD_NAME", "flow-pod")
+    monkeypatch.delenv("QCSC_OWNER_POD_UID", raising=False)
+
+    assert _prepared_k8s_req(tmp_path).owner_references == ()

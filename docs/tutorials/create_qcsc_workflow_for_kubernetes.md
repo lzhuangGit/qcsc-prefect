@@ -495,6 +495,82 @@ In your browser on the Prefect UI, navigate to the completed flow run and inspec
 
 ---
 
+## Optional: Run the Flow as a Batch Job from Your Laptop
+
+Steps 3 to 6 run the flow from an interactive shell in the runner pod. For a non-interactive run, launch the flow itself as a Kubernetes Job. The flow still runs in the cluster, next to the compute Jobs and the shared PVC, but your laptop does not have to stay connected.
+
+```mermaid
+flowchart LR
+    L["Laptop<br/>flow_launcher + kubectl"] -->|"kubectl apply -f runs/&lt;run-id&gt;/"| F
+    subgraph K8s["Kubernetes Cluster"]
+        F["Flow Job pod<br/>python flow_optimized.py"] -->|"creates, owned by the flow pod"| C["Compute Job pods<br/>get_counts_hist"]
+        F --- V[("Shared PVC")]
+        C --- V
+    end
+    F <-->|"Prefect credentials from a Secret"| P[Prefect Cloud / Server]
+```
+
+### Prerequisites
+
+- Steps 1 to 5 are done: the repository and virtual environment are on the shared volume, and the blocks exist.
+- `kubectl` on your laptop points at the cluster, and the launcher is installed there: `pip install -e packages/qcsc-prefect-executor` (it needs no cluster access of its own).
+- The flow pod uses the same `qcsc-prefect-runner` service account as the runner pod, so it may create Jobs.
+- Store the Prefect credentials in a Secret in the flow's namespace. The compute Jobs do not need it.
+
+```bash
+kubectl create secret generic prefect-credentials \
+  --from-literal=PREFECT_API_URL="<PREFECT_API_URL>" \
+  --from-literal=PREFECT_API_KEY="<PREFECT_API_KEY>"
+```
+
+> [!IMPORTANT]
+> `--work-dir` must be inside the PVC mount path as the pods see it. The launcher and the Job builder reject a work directory outside `--work-mount-path`, because that directory does not exist in the pod. If the blocks use `/data/qcsc-prefect`, mount the PVC there in the flow pod too.
+
+### Launch
+
+```bash
+python -m qcsc_prefect_executor.kubernetes.flow_launcher \
+  --image qcsc-hpc-base:latest \
+  --namespace default \
+  --work-volume-claim qcsc-shared-pvc \
+  --work-mount-path /data/qcsc-prefect \
+  --service-account qcsc-prefect-runner \
+  --env-from-secret prefect-credentials \
+  -- /data/qcsc-prefect/.venv/bin/python \
+     /data/qcsc-prefect/examples/prefect_bitcount_demo/flow_optimized.py \
+     --quantum-source random \
+     --command-block cmd-bitcount-hist \
+     --execution-profile-block exec-bitcount-k8s \
+     --hpc-profile-block hpc-k8s-bitcount \
+     --options-variable k8s-bitcount-options \
+     --work-dir /data/qcsc-prefect/work/bitcount_k8s
+```
+
+Everything after `--` is the flow command, so the launcher works for any flow, not only BitCount. Add `--node-selector`, `--toleration` or `--image-pull-secret` if your cluster needs them.
+
+The launcher writes `runs/<run-id>/flow-job.yaml`, prints the commands below, and asks whether to launch it. Pass `--launch` or `--no-launch` to skip the question. Without a terminal and without either flag, it writes the file and does not launch.
+
+| Action | Command |
+|---|---|
+| Start | `kubectl apply -f runs/<run-id>/` |
+| Follow logs | `kubectl logs -n default -f job/<run-id>` |
+| Stop and clean up | `kubectl delete -f runs/<run-id>/` |
+| Fallback cleanup | `kubectl delete jobs -n default -l qcsc-prefect/flow-run=<run-id>` |
+
+### How cleanup works
+
+`kubectl delete -f runs/<run-id>/` deletes only the flow Job. The compute Jobs are created while the flow runs, so they cannot be in that folder. Two mechanisms cover them:
+
+1. **Owner reference.** The flow pod passes its own name and UID to the code that creates compute Jobs (`QCSC_OWNER_POD_NAME`, `QCSC_OWNER_POD_UID`). Each compute Job is owned by the flow pod, so Kubernetes garbage-collects it when the flow pod is deleted.
+2. **Label.** Every Job of the run carries `qcsc-prefect/flow-run=<run-id>`. If garbage collection does not remove something, delete by label with the fallback command above.
+
+The Prefect credentials Secret, the service account and the PVC are shared between runs and are not part of the run folder.
+
+> [!NOTE]
+> The flow Job uses `backoffLimit: 0`, so a failed flow is never retried automatically and compute Jobs are not submitted twice. After `kubectl delete`, the flow run may stay in the `Running` state in the Prefect UI until Prefect marks it as crashed.
+
+---
+
 ## Troubleshooting & Tips
 
 ### 1. 403 Forbidden: Cannot get resource `jobs/status`
@@ -553,7 +629,15 @@ In your browser on the Prefect UI, navigate to the completed flow run and inspec
 
 ---
 
-### 5. Podman Tips on macOS
+### 5. `working_dir ... is not inside work_mount_path`
+- **Symptom**:
+  ```text
+  ValueError: working_dir '/data/qcsc-prefect/work/bitcount_k8s/job_...' is not inside work_mount_path '/ldata'.
+  ```
+- **Cause**: The work directory (from `--work-dir` or the options Variable) is outside the path where the PVC is mounted in the Job pod, so it does not exist there. Before this check, such a Job was created and then failed at container start (observed as exit code 255 with `workingDir` under `/data/qcsc-prefect` and the PVC mounted at `/ldata`).
+- **Solution**: Make `--work-dir`, the options Variable `work_dir`, and `--kubernetes-work-mount-path` agree, for example all under `/ldata`. Re-run `create_blocks.py` after changing them.
+
+### 6. Podman Tips on macOS
 - **Provider Flag**: `kind` requires `KIND_EXPERIMENTAL_PROVIDER=podman` when using Podman as the container engine (e.g. `KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster ...`).
 - **Image Names**: Podman prefixes locally built images with `localhost/` (e.g., `localhost/qcsc-hpc-base:latest`). Always use `localhost/qcsc-hpc-base:latest` in `k8s-qcsc-setup.yaml` and `--kubernetes-image` in `create_blocks.py` so kubelet finds the pre-loaded image in kind without attempting to query a remote registry.
 - **Machine Storage**: Podman machines on macOS only mount directories under `$HOME` into the VM by default. Always keep the host shared storage under `$HOME` (e.g. `$HOME/qcsc-shared-storage`).

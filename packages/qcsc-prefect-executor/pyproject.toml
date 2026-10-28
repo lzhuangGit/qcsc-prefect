@@ -20,6 +20,7 @@ dependencies = [
     "qcsc-prefect-adapters==0.2.5",
     "qcsc-prefect-blocks==0.2.5",
     "qcsc-prefect-core==0.2.5",
+    "pyyaml>=6",
 ]
 
 [project.urls]
