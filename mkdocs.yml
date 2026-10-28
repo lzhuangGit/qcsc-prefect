@@ -66,6 +66,7 @@ nav:
       - Fugaku Workflow: tutorials/create_qcsc_workflow_for_fugaku.md
       - Local Slurm Workflow: tutorials/create_qcsc_workflow_for_local_slurm.md
       - Kubernetes Workflow: tutorials/create_qcsc_workflow_for_kubernetes.md
+      - Closed Loop Workflow (Kubernetes): tutorials/run_sbd_closed_loop_workflow_kubernetes.md
       - Closed Loop Workflow: tutorials/run_sbd_closed_loop_workflow.md
       - Closed Loop Workflow (Fugaku): tutorials/run_sbd_closed_loop_workflow_fugaku.md
   - How-to:

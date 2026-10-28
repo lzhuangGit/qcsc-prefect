@@ -5,6 +5,8 @@ Both the Prefect flow process and the compute Job pods execute inside the Kubern
 
 Our objective is to compute a count dictionary of sampler bitstrings on Kubernetes using the QCSC architecture.
 
+To run the SBD closed-loop workflow on the same cluster, interactively or as a batch Job, continue with [Run SBD Closed-loop Workflow on Kubernetes](./run_sbd_closed_loop_workflow_kubernetes.md).
+
 ---
 
 ## Architecture & Data Flow

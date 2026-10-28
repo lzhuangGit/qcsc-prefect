@@ -1,0 +1,51 @@
+# Required for Kubernetes
+hpc_target = "kubernetes"
+# Must be under kubernetes_work_mount_path: the Job pods mount the shared volume only there.
+work_dir = "/ldata/qcsc-prefect/work/sbd_k8s"
+sbd_executable = "/ldata/qcsc-prefect/algorithms/sbd/native/diag"
+
+# Shared ReadWriteMany volume. The flow pod and every SBD Job pod mount it at the same path.
+kubernetes_image = "quay.io/<org>/qcsc-hpc-base:latest"
+kubernetes_namespace = "qcsc"
+kubernetes_work_volume_claim = "ldata-pvc"
+kubernetes_work_mount_path = "/ldata"
+
+# Optional Job pod settings
+kubernetes_image_pull_policy = "IfNotPresent"
+# kubernetes_service_account_name = ""   # Leave empty: SBD Job pods need no Kubernetes API access.
+# kubernetes_cpu = "2"                   # Request and limit. Keep >= mpiprocs.
+# kubernetes_memory = "8Gi"
+# kubernetes_node_selector = { use = "infra", arch = "arm64" }
+# kubernetes_tolerations = ["use=infra:NoSchedule", "arch=arm64:NoSchedule"]
+
+# Optional execution profile
+# A Kubernetes Job is a single pod: num_nodes must be 1, and modules/pre_commands are not supported.
+# launcher default is "mpirun". Use "single" to start the binary directly (no MPI launcher).
+launcher = "mpirun"
+walltime = "00:15:00"
+num_nodes = 1
+mpiprocs = 2
+mpi_options = ["-np", "2"]
+# environments = { OMP_NUM_THREADS = "1" }
+
+# Optional block/variable names
+command_block_name = "cmd-sbd-diag"
+execution_profile_block_name = "exec-sbd-k8s"
+hpc_profile_block_name = "hpc-k8s-sbd"
+solver_block_name = "davidson-solver"
+options_variable_name = "sqd_options"
+
+# Optional solver parameters
+task_comm_size = 1
+adet_comm_size = 1
+bdet_comm_size = 1
+# Fast preset for low-accuracy runs
+block = 4
+iteration = 1
+tolerance = 0.01
+carryover_ratio = 0.1
+solver_mode = "cpu"
+
+# Optional runtime options variable
+# Default if omitted: {"params":{"shots":50000}}
+shots = 50000

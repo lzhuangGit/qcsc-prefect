@@ -50,11 +50,11 @@ def _set_variable(variable_name: str, value: Any) -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create Prefect blocks for SBD workflow (Miyabi or Fugaku or Slurm)."
+        description="Create Prefect blocks for SBD workflow (Miyabi, Fugaku, Slurm or Kubernetes)."
     )
     parser.add_argument("--config", type=Path, help="Path to TOML/JSON config file.")
 
-    parser.add_argument("--hpc-target", choices=["miyabi", "fugaku", "slurm"])
+    parser.add_argument("--hpc-target", choices=["miyabi", "fugaku", "slurm", "kubernetes"])
     parser.add_argument("--project")
     parser.add_argument("--group")
     parser.add_argument("--queue")
@@ -73,6 +73,27 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--fugaku-gfscache")
     parser.add_argument("--fugaku-spack-modules", nargs="+")
     parser.add_argument("--fugaku-mpi-options-for-pjm", nargs="*")
+
+    parser.add_argument("--kubernetes-image")
+    parser.add_argument("--kubernetes-namespace")
+    parser.add_argument("--kubernetes-service-account-name")
+    parser.add_argument("--kubernetes-image-pull-policy")
+    parser.add_argument("--kubernetes-cpu")
+    parser.add_argument("--kubernetes-memory")
+    parser.add_argument("--kubernetes-work-volume-claim")
+    parser.add_argument("--kubernetes-work-mount-path")
+    parser.add_argument(
+        "--kubernetes-node-selector",
+        nargs="*",
+        metavar="KEY=VALUE",
+        help="Node selector labels for Job pods.",
+    )
+    parser.add_argument(
+        "--kubernetes-toleration",
+        nargs="*",
+        metavar="KEY=VALUE:EFFECT",
+        help="Tolerations for Job pods (KEY=VALUE:EFFECT, or KEY:EFFECT for operator Exists).",
+    )
 
     parser.add_argument("--script-filename")
     parser.add_argument("--metrics-artifact-key")
@@ -138,8 +159,57 @@ def _normalize_str_dict(value: Any) -> dict[str, str] | None:
     raise ValueError(f"Expected dict[str, str], got: {type(value)}")
 
 
+def _normalize_node_selector(value: Any) -> dict[str, str]:
+    """Accept a dict (config file) or 'key=value' items / CSV string (CLI, env)."""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return {str(k): str(v) for k, v in value.items()}
+    selector: dict[str, str] = {}
+    for item in _normalize_str_list(value) or []:
+        key, sep, val = item.partition("=")
+        if not sep or not key.strip():
+            raise ValueError(f"Node selector must be 'key=value', got: {item!r}")
+        selector[key.strip()] = val.strip()
+    return selector
+
+
+def _parse_toleration(item: Any) -> dict[str, str]:
+    """Accept a toleration dict or a 'key[=value][:effect]' string."""
+    if isinstance(item, dict):
+        return {str(k): str(v) for k, v in item.items()}
+    key_value, _, effect = str(item).strip().partition(":")
+    key, sep, val = key_value.partition("=")
+    key = key.strip()
+    if not key:
+        raise ValueError(f"Toleration must be 'key[=value][:effect]', got: {item!r}")
+    toleration = {"key": key, "operator": "Equal" if sep else "Exists"}
+    if sep:
+        toleration["value"] = val.strip()
+    if effect.strip():
+        toleration["effect"] = effect.strip()
+    return toleration
+
+
+def _normalize_tolerations(value: Any) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = _normalize_str_list(value)
+    if isinstance(value, (list, tuple)):
+        return [_parse_toleration(item) for item in value]
+    raise ValueError(f"Expected list of tolerations or CSV string, got: {type(value)}")
+
+
 def _default_block_names(*, hpc_target: str, solver_mode: str) -> dict[str, str]:
     is_gpu = solver_mode == "gpu"
+    if hpc_target == "kubernetes":
+        return {
+            "profile_name": "sbd-mpi",
+            "execution_profile_block_name": "exec-sbd-k8s",
+            "hpc_profile_block_name": "hpc-k8s-sbd",
+            "solver_block_name": "davidson-solver",
+        }
     if hpc_target == "miyabi":
         return {
             "profile_name": "sbd-gpu" if is_gpu else "sbd-mpi",
@@ -228,6 +298,28 @@ def _env_values() -> dict[str, Any]:
         "fugaku_gfscache": env_first_str("FUGAKU_GFSCACHE"),
         "fugaku_spack_modules": env_first_csv("FUGAKU_SPACK_MODULES"),
         "fugaku_mpi_options_for_pjm": env_first_csv("FUGAKU_MPI_OPTIONS_FOR_PJM"),
+        "kubernetes_image": env_first_str("SBD_KUBERNETES_IMAGE", "KUBERNETES_IMAGE"),
+        "kubernetes_namespace": env_first_str("SBD_KUBERNETES_NAMESPACE", "KUBERNETES_NAMESPACE"),
+        "kubernetes_service_account_name": env_first_str(
+            "SBD_KUBERNETES_SERVICE_ACCOUNT", "KUBERNETES_SERVICE_ACCOUNT"
+        ),
+        "kubernetes_image_pull_policy": env_first_str(
+            "SBD_KUBERNETES_IMAGE_PULL_POLICY", "KUBERNETES_IMAGE_PULL_POLICY"
+        ),
+        "kubernetes_cpu": env_first_str("SBD_KUBERNETES_CPU", "KUBERNETES_CPU"),
+        "kubernetes_memory": env_first_str("SBD_KUBERNETES_MEMORY", "KUBERNETES_MEMORY"),
+        "kubernetes_work_volume_claim": env_first_str(
+            "SBD_KUBERNETES_WORK_VOLUME_CLAIM", "KUBERNETES_WORK_VOLUME_CLAIM"
+        ),
+        "kubernetes_work_mount_path": env_first_str(
+            "SBD_KUBERNETES_WORK_MOUNT_PATH", "KUBERNETES_WORK_MOUNT_PATH"
+        ),
+        "kubernetes_node_selector": env_first_csv(
+            "SBD_KUBERNETES_NODE_SELECTOR", "KUBERNETES_NODE_SELECTOR"
+        ),
+        "kubernetes_tolerations": env_first_csv(
+            "SBD_KUBERNETES_TOLERATIONS", "KUBERNETES_TOLERATIONS"
+        ),
         "script_filename": env_first_str("SBD_SCRIPT_FILENAME"),
         "metrics_artifact_key": env_first_str("SBD_METRICS_ARTIFACT_KEY"),
         "command_block_name": env_first_str("SBD_CMD_BLOCK_NAME"),
@@ -267,12 +359,18 @@ def main() -> None:
         .strip()
         .lower()
     )
-    if hpc_target not in {"miyabi", "fugaku", "slurm"}:
-        raise RuntimeError("'hpc_target' must be either 'miyabi' or 'fugaku' or 'slurm'.")
+    if hpc_target not in {"miyabi", "fugaku", "slurm", "kubernetes"}:
+        raise RuntimeError(
+            "'hpc_target' must be one of 'miyabi', 'fugaku', 'slurm' or 'kubernetes'."
+        )
     is_miyabi = hpc_target == "miyabi"
     is_fugaku = hpc_target == "fugaku"
+    is_kubernetes = hpc_target == "kubernetes"
 
-    if is_miyabi:
+    if is_kubernetes:
+        # Kubernetes has no project/account or queue.
+        project = _pick_value(args.project, config.get("project"), env.get("project"), "")
+    elif is_miyabi:
         project = _pick_value(
             args.project,
             config.get("project"),
@@ -296,7 +394,7 @@ def main() -> None:
             config.get("project"),
             env.get("project"),
         )
-    if not project:
+    if not project and not is_kubernetes:
         if is_miyabi:
             raise RuntimeError(
                 "Set 'project' in --config/--project or SBD_PROJECT/MIYABI_PBS_PROJECT."
@@ -306,8 +404,10 @@ def main() -> None:
             "or use SBD_GROUP/FUGAKU_GROUP/FUGAKU_PROJECT."
         )
 
-    queue = _pick_value(args.queue, config.get("queue"), env.get("queue"))
-    if not queue:
+    queue = _pick_value(
+        args.queue, config.get("queue"), env.get("queue"), "" if is_kubernetes else None
+    )
+    if not queue and not is_kubernetes:
         raise RuntimeError(
             "Set 'queue' in --config/--queue or SBD_QUEUE/MIYABI_PBS_QUEUE/FUGAKU_RSCGRP."
         )
@@ -327,6 +427,10 @@ def main() -> None:
         launcher_default = "mpiexec.hydra"
     elif is_fugaku:
         launcher_default = "mpiexec"
+    elif is_kubernetes:
+        # mpirun from the image is the container's first process. This also avoids
+        # SELinux "entrypoint" denials for binaries stored on the shared volume.
+        launcher_default = "mpirun"
     else:
         launcher_default = "srun"
 
@@ -356,6 +460,72 @@ def main() -> None:
         or []
     )
     environments = _normalize_str_dict(config.get("environments")) or {}
+
+    kubernetes_image = str(
+        _pick_value(
+            args.kubernetes_image,
+            config.get("kubernetes_image"),
+            env.get("kubernetes_image"),
+            "qcsc-hpc-base:latest",
+        )
+    ).strip()
+    kubernetes_namespace = str(
+        _pick_value(
+            args.kubernetes_namespace,
+            config.get("kubernetes_namespace"),
+            env.get("kubernetes_namespace"),
+            "default",
+        )
+    ).strip()
+    kubernetes_service_account_name = _pick_value(
+        args.kubernetes_service_account_name,
+        config.get("kubernetes_service_account_name"),
+        env.get("kubernetes_service_account_name"),
+    )
+    kubernetes_image_pull_policy = str(
+        _pick_value(
+            args.kubernetes_image_pull_policy,
+            config.get("kubernetes_image_pull_policy"),
+            env.get("kubernetes_image_pull_policy"),
+            "IfNotPresent",
+        )
+    ).strip()
+    kubernetes_cpu = _pick_value(
+        args.kubernetes_cpu, config.get("kubernetes_cpu"), env.get("kubernetes_cpu")
+    )
+    kubernetes_memory = _pick_value(
+        args.kubernetes_memory, config.get("kubernetes_memory"), env.get("kubernetes_memory")
+    )
+    kubernetes_work_volume_claim = _pick_value(
+        args.kubernetes_work_volume_claim,
+        config.get("kubernetes_work_volume_claim"),
+        env.get("kubernetes_work_volume_claim"),
+    )
+    kubernetes_work_mount_path = _pick_value(
+        args.kubernetes_work_mount_path,
+        config.get("kubernetes_work_mount_path"),
+        env.get("kubernetes_work_mount_path"),
+    )
+    kubernetes_node_selector = _normalize_node_selector(
+        _pick_value(
+            args.kubernetes_node_selector,
+            config.get("kubernetes_node_selector"),
+            env.get("kubernetes_node_selector"),
+        )
+    )
+    kubernetes_tolerations = _normalize_tolerations(
+        _pick_value(
+            args.kubernetes_toleration,
+            config.get("kubernetes_tolerations"),
+            env.get("kubernetes_tolerations"),
+        )
+    )
+    if is_kubernetes and not (kubernetes_work_volume_claim and kubernetes_work_mount_path):
+        raise RuntimeError(
+            "Set 'kubernetes_work_volume_claim' and 'kubernetes_work_mount_path' "
+            "(--config, --kubernetes-work-volume-claim/--kubernetes-work-mount-path or "
+            "SBD_KUBERNETES_WORK_VOLUME_CLAIM/SBD_KUBERNETES_WORK_MOUNT_PATH)."
+        )
 
     fugaku_gfscache = str(
         _pick_value(
@@ -465,6 +635,8 @@ def main() -> None:
         script_filename_default = "sbd_solver.pbs"
     elif is_fugaku:
         script_filename_default = "sbd_solver.pjm"
+    elif is_kubernetes:
+        script_filename_default = "sbd_solver.k8s"  # Not used: Kubernetes runs no script.
     else:
         script_filename_default = "sbd_solver.slurm"
     script_filename = str(
@@ -480,6 +652,8 @@ def main() -> None:
         metrics_artifact_key_default = "miyabi-sbd-metrics"
     elif is_fugaku:
         metrics_artifact_key_default = "fugaku-sbd-metrics"
+    elif is_kubernetes:
+        metrics_artifact_key_default = "k8s-sbd-metrics"
     else:
         metrics_artifact_key_default = "slurm-sbd-metrics"
     metrics_artifact_key = str(
@@ -541,6 +715,21 @@ def main() -> None:
             gfscache=fugaku_gfscache or None,
             spack_modules=fugaku_spack_modules or [],
             mpi_options_for_pjm=fugaku_mpi_options_for_pjm or [],
+        ).save(hpc_profile_block_name, overwrite=True)
+    elif is_kubernetes:
+        HPCProfileBlock(
+            hpc_target="kubernetes",
+            kubernetes_image=kubernetes_image,
+            kubernetes_namespace=kubernetes_namespace,
+            kubernetes_service_account_name=kubernetes_service_account_name,
+            kubernetes_image_pull_policy=kubernetes_image_pull_policy,
+            kubernetes_cpu=kubernetes_cpu,
+            kubernetes_memory=kubernetes_memory,
+            kubernetes_work_volume_claim=kubernetes_work_volume_claim,
+            kubernetes_work_mount_path=kubernetes_work_mount_path,
+            kubernetes_node_selector=kubernetes_node_selector,
+            kubernetes_tolerations=kubernetes_tolerations,
+            executable_map={"sbd_diag": executable_path},
         ).save(hpc_profile_block_name, overwrite=True)
     else:
         HPCProfileBlock(
